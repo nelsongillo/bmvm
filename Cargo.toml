@@ -1,0 +1,8 @@
+[workspace]
+resolver = "3"
+members = [
+    "kvm_guest",
+    "kvm_macros",
+    "kvm_host",
+    "kvm_guest_sample"
+]
