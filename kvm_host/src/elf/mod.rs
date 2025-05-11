@@ -1,15 +1,12 @@
-#![allow(unused)]
+use crate::alloc::*;
 
 use anyhow::anyhow;
 use goblin::elf;
 use goblin::elf::{Elf, Header};
 use goblin::elf32::header::machine_to_str;
-use nix::sys::mman::ProtFlags;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs;
-use std::ops::DerefMut;
 use std::path::Path;
-use crate::alloc::*;
 
 macro_rules! info {
     ($($arg:tt)*) => {
@@ -166,14 +163,4 @@ pub(crate) fn check_platform_supported<B: AsRef<[u8]>>(buf: B) -> anyhow::Result
     }
 
     Ok(())
-}
-
-fn ph_flags_to_prot_flags(ph: u32) -> ProtFlags {
-    let mut result = ProtFlags::PROT_READ | ProtFlags::PROT_WRITE;
-
-    if ph > 1 {
-        result |= ProtFlags::PROT_EXEC;
-    }
-
-    result
 }

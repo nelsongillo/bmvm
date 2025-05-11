@@ -1,22 +1,33 @@
+use crate::alloc::{Anon, Perm, Readable, Writable};
 use std::ops::{Deref, DerefMut};
+use std::panic;
 use std::slice;
 
 pub enum Error {
+    /// Allocation of a new region failed due to the host being out of memory.
     OutOfMemory,
     /// The provided offset is not included in the region address space.
     /// Provided Offset, Max Offset
     InvalidOffset(usize, usize),
     /// The provided address is not included in the region address space.
     /// Provided Address, Starting Address, Size
-    InvalidAddress(PhyAddr, PhyAddr, usize)
+    InvalidAddress(PhyAddr, PhyAddr, usize),
 }
 
 impl std::fmt::Debug for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::OutOfMemory => write!(f, "out of memory"),
-            Error::InvalidOffset(offset, max) => write!(f, "invalid offset: {} (max: {})", offset, max),
-            Error::InvalidAddress(addr, start, size) => write!(f, "invalid address: {:#x} (start: {:#x}, size: {})", addr, start, size),
+            Error::OutOfMemory => std::write!(f, "out of memory"),
+            Error::InvalidOffset(offset, max) => {
+                std::write!(f, "invalid offset: {} (max: {})", offset, max)
+            }
+            Error::InvalidAddress(addr, start, size) => std::write!(
+                f,
+                "invalid address: {:#x} (start: {:#x}, size: {})",
+                addr,
+                start,
+                size
+            ),
         }
     }
 }
@@ -24,9 +35,17 @@ impl std::fmt::Debug for Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::OutOfMemory => write!(f, "out of memory"),
-            Error::InvalidOffset(offset, max) => write!(f, "invalid offset: {} (max: {})", offset, max),
-            Error::InvalidAddress(addr, start, size) => write!(f, "invalid address: {:#x} (start: {:#x}, size: {})", addr, start, size),
+            Error::OutOfMemory => std::write!(f, "out of memory"),
+            Error::InvalidOffset(offset, max) => {
+                std::write!(f, "invalid offset: {} (max: {})", offset, max)
+            }
+            Error::InvalidAddress(addr, start, size) => std::write!(
+                f,
+                "invalid address: {:#x} (start: {:#x}, size: {})",
+                addr,
+                start,
+                size
+            ),
         }
     }
 }
@@ -51,7 +70,6 @@ pub trait Align: Copy + Eq + PartialEq + PartialOrd + Ord {
     fn align_ceil(addr: u64) -> u64 {
         (addr + Self::ALIGNMENT - 1) & !(Self::ALIGNMENT - 1)
     }
-
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -63,7 +81,6 @@ pub type DefaultAlign = Arm64;
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct X86_64;
 
-
 impl Align for X86_64 {
     const ALIGNMENT: u64 = 0x1000;
 }
@@ -71,24 +88,15 @@ impl Align for X86_64 {
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Arm64;
 
-
 impl Align for Arm64 {
     const ALIGNMENT: u64 = 0x1000;
 }
 
-
 type PhyAddr = u64;
 
-pub trait Writable {}
-
-pub trait Readable {}
-
-pub struct ReadOnly;
-pub struct WriteOnly;
-pub struct ReadWrite;
-
-
-pub struct Region<P, A: Align = DefaultAlign> {
+/// This represents a memory region on host, which can be mapped into the physical memory
+/// of the guest.
+pub struct Region<P: Perm, A: Align = DefaultAlign> {
     physical_addr: PhyAddr,
     size: usize,
     ptr: *mut u8,
@@ -96,31 +104,29 @@ pub struct Region<P, A: Align = DefaultAlign> {
     _align: std::marker::PhantomData<A>,
 }
 
-impl<P, A: Align> Region<P, A> {
-    pub fn new() -> Self {
-        Self {
-            physical_addr: 0,
-            size: 0,
-            ptr: std::ptr::null_mut(),
-            _perm: std::marker::PhantomData,
-            _align: std::marker::PhantomData,
-        }
-    }
-
+impl<P: Perm, A: Align> Region<P, A> {
     /// Set the guest address of the region.
     /// This is used to set the guest address of the region when it is mapped.
     /// This is not used for the initial allocation of the region.
     /// Panics, if the provided address is not aligned.
     pub fn set_guest_addr(&mut self, addr: PhyAddr) {
         if !A::is_aligned(addr) {
-            panic!("address {:#x} is not properly aligned for {:#x}", addr, A::ALIGNMENT);
+            panic!(
+                "address {:#x} is not properly aligned for {:#x}",
+                addr,
+                A::ALIGNMENT
+            );
         }
         self.physical_addr = addr;
     }
-    fn guest_addr(&self) -> PhyAddr {
+
+    /// Get the guest physical address, where the region is mapped to
+    pub fn guest_addr(&self) -> PhyAddr {
         self.physical_addr
     }
-    fn size(&self) -> usize {
+
+    /// Get the region size. This will always be a multiple of Align
+    pub fn size(&self) -> usize {
         self.size
     }
 }
@@ -128,30 +134,53 @@ impl<P, A: Align> Region<P, A> {
 impl<P: Readable> Region<P> {
     /// `read_offset` is like read, but tries to read from a given offset in the page.
     /// An offset of 0 indicates the beginning of the page
-    pub fn read_offset(&mut self, offset: usize, buf: &[u8]) -> std::io::Result<usize> {
-        // TODO: implement
-        panic!("not implemented");
+    pub fn read_offset(&self, offset: usize, buf: &mut [u8]) -> Result<usize, Error> {
+        if offset > self.size {
+            return Err(Error::InvalidOffset(offset, self.size));
+        }
+
+        // early exit if buffer length is 0
+        if buf.len() == 0 {
+            return Ok(0);
+        }
+
+        // Copy data into the memory-mapped region
+        let to_copy = if buf.len() > self.size - offset {
+            self.size - offset
+        } else {
+            buf.len()
+        };
+        buf.copy_from_slice(&self.deref()[offset..(offset + to_copy)]);
+        Ok(to_copy)
     }
 
     /// `read_abs` is like `read`, but tries to start reading based on the absolute address.
     /// If the provided address is not included in the region address space, an Error will be returned.
-    fn read_addr(&mut self, addr: u64, buf: &[u8]) -> std::io::Result<usize> {
-        // TODO: implement
-        panic!("not implemented");
+    fn read_addr(&self, addr: u64, buf: &mut [u8]) -> Result<usize, Error> {
+        if self.physical_addr < addr {
+            return Err(Error::InvalidAddress(addr, self.physical_addr, self.size));
+        }
+
+        if self.physical_addr + (self.size as u64) < addr {
+            return Err(Error::InvalidAddress(addr, self.physical_addr, self.size));
+        }
+
+        let offset = (addr - self.physical_addr) as usize;
+        self.read_offset(offset, buf)
     }
 }
 
 impl<P: Writable> Region<P> {
     /// `write_offset` is like `write`, but tries to start writing at the given offset in the page.
     /// An offset of 0 indicates the beginning of the page.
-    pub fn write_offset(&mut self, offset: usize, buf: &[u8]) -> Result<usize, Error>{
+    pub fn write_offset(&mut self, offset: usize, buf: &[u8]) -> Result<usize, Error> {
         if offset > self.size {
-            return Err(Error::InvalidOffset(offset, self.size))
+            return Err(Error::InvalidOffset(offset, self.size));
         }
 
         // early exit if the buffer is empty
         if buf.is_empty() {
-            return Ok(0)
+            return Ok(0);
         }
 
         // Calculate the amount of data that can be written
@@ -170,7 +199,6 @@ impl<P: Writable> Region<P> {
             return Err(Error::InvalidAddress(addr, self.physical_addr, self.size));
         }
 
-
         if self.physical_addr + (self.size as u64) < addr {
             return Err(Error::InvalidAddress(addr, self.physical_addr, self.size));
         }
@@ -180,8 +208,9 @@ impl<P: Writable> Region<P> {
     }
 }
 
+impl<P: Anon> Region<P> {}
 
-impl<P, A: Align> Deref for Region<P, A> {
+impl<P: Perm, A: Align> Deref for Region<P, A> {
     type Target = [u8];
 
     #[inline]
@@ -190,21 +219,21 @@ impl<P, A: Align> Deref for Region<P, A> {
     }
 }
 
-impl<P, A: Align> DerefMut for Region<P, A> {
+impl<P: Perm, A: Align> DerefMut for Region<P, A> {
     #[inline]
     fn deref_mut(&mut self) -> &mut [u8] {
         unsafe { slice::from_raw_parts_mut(self.ptr, self.size) }
     }
 }
 
-impl<P, A: Align> AsRef<[u8]> for Region<P, A> {
+impl<P: Perm, A: Align> AsRef<[u8]> for Region<P, A> {
     #[inline]
     fn as_ref(&self) -> &[u8] {
         self.deref()
     }
 }
 
-impl<P, A: Align> AsMut<[u8]> for Region<P, A> {
+impl<P: Perm, A: Align> AsMut<[u8]> for Region<P, A> {
     #[inline]
     fn as_mut(&mut self) -> &mut [u8] {
         self.deref_mut()
@@ -212,5 +241,5 @@ impl<P, A: Align> AsMut<[u8]> for Region<P, A> {
 }
 
 pub trait Manager {
-    fn allocate<P, A: Align>(&self, size: u64) -> Result<Region<P, A>, Error>;
+    fn allocate<P: Perm, A: Align>(&self, size: u64) -> Result<Region<P, A>, Error>;
 }
