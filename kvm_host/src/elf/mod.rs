@@ -9,7 +9,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::fs;
 use std::ops::DerefMut;
 use std::path::Path;
-use crate::alloc::{align_ceil, align_floor, Page, PageAllocator, PageSize};
+use crate::alloc::*;
 
 macro_rules! info {
     ($($arg:tt)*) => {
@@ -68,20 +68,20 @@ impl Display for LoadError {
 
 impl std::error::Error for LoadError {}
 
-pub struct ExecBundle<P: Page> {
-    pub mem_regions: Vec<P>,
+pub struct ExecBundle {
+    pub mem_regions: Vec<Region<ReadWrite>>,
     pub entry_point: u64,
     pub stack_pointer: u64,
 }
 
 const STATIC_PAGE_OFFSET: u64 = 0x40_000;
 
-impl<P: Page> ExecBundle<P> {
-    pub fn new<F: AsRef<Path>,  PA: PageAllocator<P>>(path: F, allocator: PA) -> anyhow::Result<ExecBundle<P>> {
+impl ExecBundle {
+    pub fn new<P: AsRef<Path>>(path: P, manager: impl Manager) -> anyhow::Result<ExecBundle> {
         let elf_buf = fs::read(path)?;
         let elf = Elf::parse(&elf_buf)?;
 
-        let mut mem_regions = Vec::new();
+        let mut mem_regions: Vec<Region<ReadWrite>> = Vec::new();
 
         // stack should start from here
         // | code | data | stack |
@@ -98,17 +98,17 @@ impl<P: Page> ExecBundle<P> {
             }
 
             // calc how many pages to allocate
-            let p_start = align_floor::<P>(ph.p_vaddr);
-            let mut p_end = align_ceil::<P>(ph.p_vaddr + ph.p_memsz);
-            p_end =  align_ceil::<P>(p_end);
+            let p_start = DefaultAlign::align_floor(ph.p_vaddr);
+            let mut p_end = DefaultAlign::align_ceil(ph.p_vaddr + ph.p_memsz);
+            p_end =  DefaultAlign::align_ceil(p_end);
             let to_alloc = p_end - p_start;
 
             // allocate + copy file content to region
-            let mut mem = allocator.allocate(to_alloc)?;
+            let mut mem = manager.allocate::<ReadWrite, DefaultAlign>(to_alloc)?;
             let to_cpy =
                 &elf_buf[ph.p_offset as usize..(ph.p_offset as usize + ph.p_filesz as usize)];
             let region_offset = ph.p_vaddr - p_start;
-            mem.write_at(region_offset as usize, to_cpy)?;
+            mem.write_offset(region_offset as usize, to_cpy)?;
 
             // save region for use in bundle
             // mem.set_guest_addr(p_start);
