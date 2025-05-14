@@ -4,8 +4,8 @@ use quote::{format_ident, quote};
 use syn::spanned::Spanned;
 use syn::Error;
 use syn::{parse_macro_input, Attribute, ForeignItem, ForeignItemFn, ItemForeignMod, Meta};
+use bmvm_common::BMVM_META_SECTION;
 
-const BMVM_META_SECTION: &str = ".bmvm.call.host";
 const BMVM_META_STATIV_PREFIX: &str = "BMVM_CALL_META_";
 
 pub fn call_host_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -89,13 +89,20 @@ fn gen_callmeta(func: &ForeignItemFn) -> proc_macro2::TokenStream {
             .into();
     }
 
-    let meta_bytes = meta.unwrap().as_bytes();
+    // Get the CallMeta as bytes and prefix with the size (u16)
+    let mut meta_bytes = meta.unwrap().as_bytes();
     let size = meta_bytes.len();
+    let size_bytes = (size as u16).to_ne_bytes();
+    
+    // Combine the size and the bytes and generate the final output
+    let mut bytes = size_bytes.to_vec();
+    bytes.append(&mut meta_bytes);
+    let final_size = bytes.len(); 
     quote! {
         #[used]
         #[unsafe(link_section = #BMVM_META_SECTION)]
-        static #meta_name: [u8; #size] = [
-            #(#meta_bytes),*
+        static #meta_name: [u8; #final_size] = [
+            #(#bytes),*
         ];
     }
 }

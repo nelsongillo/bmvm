@@ -82,13 +82,14 @@ impl TryFrom<Type> for DataType {
                     }
                     Err("Unsupported type")
                 }
-                _ => Err("Unsupported type")
+                _ => Err("Unsupported type"),
             },
-            _ => Err("Unsupported type")
+            _ => Err("Unsupported type"),
         }
     }
 }
 
+#[derive(Debug)]
 pub struct CallMeta {
     id: u32,
     argv: Vec<DataType>,
@@ -103,13 +104,6 @@ impl CallMeta {
             + size_of::<u8>()
             // Fn Name: min len 1 + null terminator
             + size_of::<u8>() + size_of::<u8>()
-    };
-
-    const ARGV_BEGIN: usize = {
-        // u32 ID
-        size_of::<u32>()
-            // argc (here 0 -> no argv)
-            + size_of::<u8>()
     };
 
     pub fn new(argv: Vec<DataType>, fn_name: &str) -> anyhow::Result<Self> {
@@ -143,10 +137,18 @@ impl CallMeta {
         }
 
         // Extract ID
-        let id = u32::from_ne_bytes([input[0], input[1], input[2], input[3]]);
+        let mut offset = 0;
+        let id = u32::from_ne_bytes([
+            input[offset],
+            input[offset + 1],
+            input[offset + 2],
+            input[offset + 3],
+        ]);
+        offset += size_of::<u32>();
 
         // extract argv
-        let argc = input[4];
+        let argc = input[offset];
+        offset += size_of::<u8>();
         let min_expected_len = Self::MIN_SIZE + argc as usize;
         if input.len() < min_expected_len {
             return Err(anyhow!(
@@ -157,21 +159,48 @@ impl CallMeta {
             ));
         }
         let argv = if argc > 0 {
-            convert_bytes_to_types(
-                &input[CallMeta::ARGV_BEGIN..CallMeta::ARGV_BEGIN + argc as usize],
-            )?
+            convert_bytes_to_types(&input[offset..offset + argc as usize])?
         } else {
             Vec::new()
         };
+        offset += argc as usize;
 
         // extract fn_name
-        let name_slice = &input[CallMeta::ARGV_BEGIN + argc as usize..];
-        if name_slice.last() != Some(&0) {
-            return Err(anyhow!("fn_name not null-terminated"));
-        }
+        let nul_pos = memchr::memchr(0, &input[offset..])
+            .ok_or_else(|| anyhow!("fn_name not null-terminated!"))?;
+        let name_slice = &input[offset..offset + nul_pos + 1];
         let fn_name = CString::from_vec_with_nul(name_slice.to_vec())?;
 
         Ok(CallMeta { id, argv, fn_name })
+    }
+
+    pub fn try_from_bytes_vec(input: &[u8]) -> anyhow::Result<Vec<CallMeta>> {
+        let mut output = Vec::new();
+        let mut offset = 0;
+
+        // iterate over all meta
+        while offset < input.len() {
+            // Check for incomplete call meta
+            if input.len() < offset + Self::MIN_SIZE + size_of::<u16>() {
+                return Err(anyhow!(
+                    "incomplete call meta found starting from offset {}. Expected at least {} bytes but got only {}",
+                    offset,
+                    Self::MIN_SIZE + size_of::<u16>(),
+                    input.len() - offset
+                ));
+            }
+
+            // Extract the size of the meta
+            let size = u16::from_ne_bytes([input[offset], input[offset + 1]]);
+            offset += size_of::<u16>();
+
+            // Extract the meta
+            let meta = Self::try_from_bytes(&input[offset..offset + size as usize])?;
+            offset += size as usize;
+            output.push(meta);
+        }
+
+        Ok(output)
     }
 
     pub fn as_bytes(&self) -> Vec<u8> {
@@ -216,6 +245,29 @@ mod test {
             }
             Err(e) => {
                 panic!("{:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn from_bytes_no_nul_term() {
+        let raw: [u8; 8] = [
+            // Hash
+            182, 140, 231, 158, // Argc
+            0,   // Function name as C string: FOO
+            102, 111, 111,
+        ];
+
+        let meta = CallMeta::try_from_bytes(raw.as_ref());
+        match meta {
+            Ok(meta) => {
+                panic!(
+                    "Provided fn name was not null-terminated but parsing succeeded!: {:?}",
+                    meta
+                );
+            }
+            Err(e) => {
+                assert_eq!(e.to_string(), "fn_name not null-terminated!");
             }
         }
     }

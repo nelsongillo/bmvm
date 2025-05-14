@@ -7,6 +7,8 @@ use goblin::elf32::header::machine_to_str;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs;
 use std::path::Path;
+use bmvm_common::BMVM_META_SECTION;
+use bmvm_common::meta::CallMeta;
 
 macro_rules! info {
     ($($arg:tt)*) => {
@@ -61,15 +63,11 @@ impl Display for LoadError {
 
 impl std::error::Error for LoadError {}
 
-pub struct CallMeta {
-    id: u32,
-    name: String,
-}
-
 pub struct ExecBundle {
     pub mem_regions: Vec<Region<ReadWrite>>,
     pub entry_point: u64,
     pub stack_pointer: u64,
+    pub calls: Vec<CallMeta>,
 }
 
 impl ExecBundle {
@@ -118,11 +116,36 @@ impl ExecBundle {
             mem_regions,
             entry_point: elf.header.e_entry,
             stack_pointer: next_page,
+            calls: Self::parse_meta(&elf, &elf_buf)?,
         })
     }
     
-    fn parse_meta() -> anyhow::Result<()> {
-        Ok(())
+    fn parse_meta(elf: &Elf, buf: &[u8]) -> anyhow::Result<Vec<CallMeta>> {
+        let mut content: &[u8] = &[];
+
+        for section in  elf.section_headers.iter() {
+            let name_offset = section.sh_name;
+            // No index in shstrtab -> no name
+            if name_offset == 0 {
+                continue;
+            }
+            // retrieve name from shstrtab and match it with our custom Metadata section name
+            if let Some(name) = elf.shdr_strtab.get_at(name_offset) {
+                if !name.eq(BMVM_META_SECTION) {
+                    continue;
+                }
+
+                // retrieve content of section
+                content = &buf[section.sh_offset as usize..(section.sh_offset + section.sh_size) as usize];
+                break;
+            }
+        }
+        
+        if content.is_empty() {
+            return Err(anyhow!("No metadata section found."));
+        }
+        
+        Ok(CallMeta::try_from_bytes_vec(&content)?)
     }
 }
 
