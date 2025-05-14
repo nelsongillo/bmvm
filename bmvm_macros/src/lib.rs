@@ -1,5 +1,5 @@
-mod host;
 mod guest;
+mod host;
 
 use proc_macro::TokenStream;
 
@@ -7,7 +7,7 @@ use proc_macro::TokenStream;
 ///
 /// # Example
 /// ```
-/// #[kvm_macros::entry]
+/// #[bmvm_macros::entry]
 /// fn my_main() {}
 /// ```
 #[proc_macro_attribute]

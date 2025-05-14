@@ -1,9 +1,12 @@
-use crate::guest::util::djb2_u32;
-
+use bmvm_common::meta::{CallMeta, DataType};
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
+use syn::spanned::Spanned;
 use syn::Error;
 use syn::{parse_macro_input, Attribute, ForeignItem, ForeignItemFn, ItemForeignMod, Meta};
+
+const BMVM_META_SECTION: &str = ".bmvm.call.host";
+const BMVM_META_STATIV_PREFIX: &str = "BMVM_CALL_META_";
 
 pub fn call_host_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // Parse the input as a foreign module (extern block)
@@ -20,15 +23,15 @@ pub fn call_host_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
             foreign_mod.abi,
             "This attribute can only be applied to extern \"C\" blocks",
         )
-            .to_compile_error()
-            .into();
+        .to_compile_error()
+        .into();
     }
 
     // Process each function in the extern block
     let stubs = foreign_mod.items.iter().filter_map(|item| match item {
         ForeignItem::Fn(func) => {
-            let stub = generate_stub(func);
-            let meta = generate_meta(func);
+            let meta = gen_callmeta(func);
+            let stub = gen_stub(func);
             Some(quote! {
                 #meta
                 #stub
@@ -45,28 +48,7 @@ pub fn call_host_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-fn generate_meta(func: &ForeignItemFn) -> proc_macro2::TokenStream {
-    let func_name = get_link_name(&func.attrs).unwrap_or_else(|| func.sig.ident.to_string());
-    let static_name = format_ident!("KVM_HOST_CALL_META_{}", func_name);
-
-    let id = djb2_u32(func_name.as_str());
-    let meta_str = format!("{}:{}", id, func_name.to_uppercase());
-
-    // Convert string to a byte array
-    let bytes: Vec<u8> = meta_str.bytes().collect();
-    let len = bytes.len();
-    let byte_array = quote! { [ #(#bytes),* ] };
-
-    quote! {
-        #[used]
-        #[unsafe(no_mangle)]
-        #[unsafe(link_section = ".kvm_meta")]
-        static #static_name: [u8; #len] = #byte_array;
-
-    }
-}
-
-fn generate_stub(func: &ForeignItemFn) -> proc_macro2::TokenStream {
+fn gen_stub(func: &ForeignItemFn) -> proc_macro2::TokenStream {
     let vis = &func.vis;
     let sig = &func.sig;
     let ident = &sig.ident;
@@ -76,6 +58,45 @@ fn generate_stub(func: &ForeignItemFn) -> proc_macro2::TokenStream {
         #vis #sig{
             panic!("Stub called for extern \"C\" function {}", stringify!(#ident));
         }
+    }
+}
+
+
+fn gen_callmeta(func: &ForeignItemFn) -> proc_macro2::TokenStream {
+    let fn_name = get_link_name(&func.attrs).unwrap_or_else(|| func.sig.ident.to_string());
+    let fn_args = &func.sig.inputs;
+
+    let mut type_codes = Vec::new();
+
+    for arg in fn_args.iter() {
+        if let syn::FnArg::Typed(pat_type) = arg {
+            let ty = &pat_type.ty;
+            let code = DataType::try_from(*ty.clone());
+            if code.is_err() {
+                return Error::new(ty.span(), code.err().unwrap().to_string())
+                    .to_compile_error()
+                    .into();
+            }
+            type_codes.push(code.unwrap());
+        }
+    }
+
+    let meta_name = format_ident!("{}{}", BMVM_META_STATIV_PREFIX, fn_name.to_uppercase());
+    let meta = CallMeta::new(type_codes, fn_name.as_str());
+    if meta.is_err() {
+        return Error::new(func.span(), meta.err().unwrap().to_string())
+            .to_compile_error()
+            .into();
+    }
+
+    let meta_bytes = meta.unwrap().as_bytes();
+    let size = meta_bytes.len();
+    quote! {
+        #[used]
+        #[unsafe(link_section = #BMVM_META_SECTION)]
+        static #meta_name: [u8; #size] = [
+            #(#meta_bytes),*
+        ];
     }
 }
 

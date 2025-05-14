@@ -4,11 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-kvm_guest = {path = "../kvm_guest"}
+bmvm-guest = {path = "../bmvm_guest" }
 
 [profile.dev]
 panic = "abort"
 
 [profile.release]
-lto = true
 panic = "abort"

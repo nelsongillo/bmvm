@@ -1,5 +1,5 @@
 [package]
-name = "kmv_host"
+name = "bmvm-host"
 version = "0.1.0"
 edition = "2024"
 

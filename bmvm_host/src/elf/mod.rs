@@ -21,11 +21,7 @@ macro_rules! error {
     };
 }
 
-const KVM_API_VERSION: i32 = 12;
 const SUPPORTED_PLATFORMS: &[u16] = &[elf::header::EM_386, elf::header::EM_X86_64];
-const STACK_MEM_SIZE: usize = 0x1000;
-const PAGE_SIZE: u64 = 0x1000;
-const FIRST_PAGE_OFFSET: u64 = 0x1000;
 
 #[derive(Debug)]
 pub enum LoadError {
@@ -65,13 +61,16 @@ impl Display for LoadError {
 
 impl std::error::Error for LoadError {}
 
+pub struct CallMeta {
+    id: u32,
+    name: String,
+}
+
 pub struct ExecBundle {
     pub mem_regions: Vec<Region<ReadWrite>>,
     pub entry_point: u64,
     pub stack_pointer: u64,
 }
-
-const STATIC_PAGE_OFFSET: u64 = 0x40_000;
 
 impl ExecBundle {
     pub fn new<P: AsRef<Path>>(path: P, manager: impl Manager) -> anyhow::Result<ExecBundle> {
@@ -97,7 +96,7 @@ impl ExecBundle {
             // calc how many pages to allocate
             let p_start = DefaultAlign::align_floor(ph.p_vaddr);
             let mut p_end = DefaultAlign::align_ceil(ph.p_vaddr + ph.p_memsz);
-            p_end =  DefaultAlign::align_ceil(p_end);
+            p_end = DefaultAlign::align_ceil(p_end);
             let to_alloc = p_end - p_start;
 
             // allocate + copy file content to region
@@ -120,6 +119,10 @@ impl ExecBundle {
             entry_point: elf.header.e_entry,
             stack_pointer: next_page,
         })
+    }
+    
+    fn parse_meta() -> anyhow::Result<()> {
+        Ok(())
     }
 }
 

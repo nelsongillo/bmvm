@@ -1,7 +1,8 @@
 [package]
-name = "kvm_guest"
+name = "bmvm-common"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-kvm_macros = {path = "../kvm_macros"}
+anyhow = "1.0.98"
+syn = "2.0.101"
