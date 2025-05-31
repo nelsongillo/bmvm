@@ -1,0 +1,10 @@
+[package]
+name = "host"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bmvm-host = {path = "../../bmvm_host" }
+bmvm-common = {path = "../../bmvm_common",features = ["std"]}
+serde = { version = "1.0.219", features = ["derive"] }
+

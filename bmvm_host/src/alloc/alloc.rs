@@ -2,6 +2,7 @@ use crate::alloc::{Anon, Perm, Readable, Writable};
 use std::ops::{Deref, DerefMut};
 use std::panic;
 use std::slice;
+use bmvm_common::mem::{Align, DefaultAlign, PhysAddr};
 
 pub enum Error {
     /// Allocation of a new region failed due to the host being out of memory.
@@ -11,7 +12,7 @@ pub enum Error {
     InvalidOffset(usize, usize),
     /// The provided address is not included in the region address space.
     /// Provided Address, Starting Address, Size
-    InvalidAddress(PhyAddr, PhyAddr, usize),
+    InvalidAddress(u64, PhysAddr, usize),
 }
 
 impl std::fmt::Debug for Error {
@@ -52,52 +53,10 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Trait to abstract over different page sizes based on the underlying architecture.
-pub trait Align: Copy + Eq + PartialEq + PartialOrd + Ord {
-    /// The page size in bytes.
-    const ALIGNMENT: u64;
-
-    fn is_aligned(addr: u64) -> bool {
-        addr % Self::ALIGNMENT == 0
-    }
-
-    /// align an address to the beginning of the page
-    fn align_floor(addr: u64) -> u64 {
-        addr & !(Self::ALIGNMENT - 1)
-    }
-
-    /// align an address to the beginning of the next page
-    fn align_ceil(addr: u64) -> u64 {
-        (addr + Self::ALIGNMENT - 1) & !(Self::ALIGNMENT - 1)
-    }
-}
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-pub type DefaultAlign = X86_64;
-
-#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-pub type DefaultAlign = Arm64;
-
-#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct X86_64;
-
-impl Align for X86_64 {
-    const ALIGNMENT: u64 = 0x1000;
-}
-
-#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct Arm64;
-
-impl Align for Arm64 {
-    const ALIGNMENT: u64 = 0x1000;
-}
-
-type PhyAddr = u64;
-
 /// This represents a memory region on host, which can be mapped into the physical memory
 /// of the guest.
 pub struct Region<P: Perm, A: Align = DefaultAlign> {
-    physical_addr: PhyAddr,
+    physical_addr: PhysAddr,
     size: usize,
     ptr: *mut u8,
     _perm: std::marker::PhantomData<P>,
@@ -109,8 +68,8 @@ impl<P: Perm, A: Align> Region<P, A> {
     /// This is used to set the guest address of the region when it is mapped.
     /// This is not used for the initial allocation of the region.
     /// Panics, if the provided address is not aligned.
-    pub fn set_guest_addr(&mut self, addr: PhyAddr) {
-        if !A::is_aligned(addr) {
+    pub fn set_guest_addr(&mut self, addr: PhysAddr) {
+        if !A::is_aligned(addr.as_u64()) {
             panic!(
                 "address {:#x} is not properly aligned for {:#x}",
                 addr,
@@ -121,7 +80,7 @@ impl<P: Perm, A: Align> Region<P, A> {
     }
 
     /// Get the guest physical address, where the region is mapped to
-    pub fn guest_addr(&self) -> PhyAddr {
+    pub fn guest_addr(&self) -> PhysAddr {
         self.physical_addr
     }
 
@@ -157,15 +116,15 @@ impl<P: Readable> Region<P> {
     /// `read_abs` is like `read`, but tries to start reading based on the absolute address.
     /// If the provided address is not included in the region address space, an Error will be returned.
     fn read_addr(&self, addr: u64, buf: &mut [u8]) -> Result<usize, Error> {
-        if self.physical_addr < addr {
+        if self.physical_addr.as_u64() < addr {
             return Err(Error::InvalidAddress(addr, self.physical_addr, self.size));
         }
 
-        if self.physical_addr + (self.size as u64) < addr {
-            return Err(Error::InvalidAddress(addr, self.physical_addr, self.size));
+        if self.physical_addr.as_u64() + ( self.size as u64) < addr {
+        return Err(Error::InvalidAddress(addr, self.physical_addr, self.size));
         }
 
-        let offset = (addr - self.physical_addr) as usize;
+        let offset = (addr - self.physical_addr.as_u64()) as usize;
         self.read_offset(offset, buf)
     }
 }
@@ -195,15 +154,15 @@ impl<P: Writable> Region<P> {
     /// `write_abs` is like `write`, but tries to start writing based on the absolute address.
     /// If the provided address is not included in the region address space, an Error will be returned.
     fn write_addr(&mut self, addr: u64, buf: &[u8]) -> Result<usize, Error> {
-        if self.physical_addr < addr {
+        if self.physical_addr.as_u64() < addr {
             return Err(Error::InvalidAddress(addr, self.physical_addr, self.size));
         }
 
-        if self.physical_addr + (self.size as u64) < addr {
+        if self.physical_addr.as_u64() + (self.size as u64) < addr {
             return Err(Error::InvalidAddress(addr, self.physical_addr, self.size));
         }
 
-        let offset = (addr - self.physical_addr) as usize;
+        let offset = (addr - self.physical_addr.as_u64()) as usize;
         self.write_offset(offset, buf)
     }
 }
@@ -241,5 +200,8 @@ impl<P: Perm, A: Align> AsMut<[u8]> for Region<P, A> {
 }
 
 pub trait Manager {
-    fn allocate<P: Perm, A: Align>(&self, size: u64) -> Result<Region<P, A>, Error>;
+    fn allocate_alignment<P: Perm, A: Align>(&self, size: u64) -> Result<Region<P, A>, Error>;
+    fn allocate<P: Perm>(&self, size: u64) -> Result<Region<P, DefaultAlign>, Error> {
+        self.allocate_alignment::<P, DefaultAlign>(size)
+    }
 }

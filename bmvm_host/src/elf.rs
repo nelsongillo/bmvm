@@ -1,25 +1,24 @@
 use crate::alloc::*;
 
 use anyhow::anyhow;
+use bmvm_common::mem::{align_ceil, align_floor, Align, DefaultAlign, Flags, LayoutTable, LayoutTableEntry, PhysAddr};
 use goblin::elf;
-use goblin::elf::{Elf, Header};
+use goblin::elf::{Elf, Header, ProgramHeader};
 use goblin::elf32::header::machine_to_str;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs;
 use std::path::Path;
-use bmvm_common::BMVM_META_SECTION;
-use bmvm_common::meta::CallMeta;
 
 macro_rules! info {
     ($($arg:tt)*) => {
-        log::info!(target: "elf", $($arg)*);
+        log::info!(target: "guest", $($arg)*);
     };
 }
 
 #[macro_export]
 macro_rules! error {
     ($($arg:tt)*) => {
-        log::error!(target: "elf", $($arg)*);
+        log::error!(target: "guest", $($arg)*);
     };
 }
 
@@ -66,24 +65,26 @@ impl std::error::Error for LoadError {}
 pub struct ExecBundle {
     pub mem_regions: Vec<Region<ReadWrite>>,
     pub entry_point: u64,
-    pub stack_pointer: u64,
-    pub calls: Vec<CallMeta>,
+    pub layout: LayoutTable,
+    // pub calls: Vec<CallMeta>,
 }
 
 impl ExecBundle {
     pub fn new<P: AsRef<Path>>(path: P, manager: impl Manager) -> anyhow::Result<ExecBundle> {
-        let elf_buf = fs::read(path)?;
+        // early exit if minimal requirements are not met
+        check_minimal_file_requirements(&path)?;
+        let elf_buf = fs::read(&path)?;
+
+        // early exit if the platform is not supported
+        check_platform_supported(&elf_buf)?;
+        // parse guest
         let elf = Elf::parse(&elf_buf)?;
 
         let mut mem_regions: Vec<Region<ReadWrite>> = Vec::new();
+        let mut layout = LayoutTable::default();
+        let mut layout_idx = 0;
 
-        // stack should start from here
-        // | code | data | stack |
-        // 0 assumes no PH_LOAD header were provided and therefore starts at the very beginning
-        // a separate memory region should be allocated for the stack
-        // this will be done in the vm execution function
-        let mut next_page = 0u64;
-
+        // | code | data | heap | ...
         // iterate through all PH_LOAD header and build buffer
         for ph in elf.program_headers.iter() {
             // Skip non PT_LOAD header
@@ -92,34 +93,32 @@ impl ExecBundle {
             }
 
             // calc how many pages to allocate
-            let p_start = DefaultAlign::align_floor(ph.p_vaddr);
-            let mut p_end = DefaultAlign::align_ceil(ph.p_vaddr + ph.p_memsz);
-            p_end = DefaultAlign::align_ceil(p_end);
+            let p_start = align_floor(ph.p_vaddr);
+            let p_end = align_ceil(ph.p_vaddr + ph.p_memsz);
             let to_alloc = p_end - p_start;
 
+            // try creating a layout entry for this segment
+            layout.entries[layout_idx] = Self::build_layout_table_entry(ph, to_alloc, &elf)?;
+            layout_idx += 1;
+
             // allocate + copy file content to region
-            let mut mem = manager.allocate::<ReadWrite, DefaultAlign>(to_alloc)?;
+            let mut mem = manager.allocate::<ReadWrite>(to_alloc)?;
             let to_cpy =
                 &elf_buf[ph.p_offset as usize..(ph.p_offset as usize + ph.p_filesz as usize)];
             let region_offset = ph.p_vaddr - p_start;
             mem.write_offset(region_offset as usize, to_cpy)?;
-
-            // save region for use in bundle
-            // mem.set_guest_addr(p_start);
+            mem.set_guest_addr(PhysAddr::new(p_start));
             mem_regions.push(mem);
-
-            // save next possible mem region for later use
-            next_page = p_end;
         }
 
         Ok(ExecBundle {
             mem_regions,
             entry_point: elf.header.e_entry,
-            stack_pointer: next_page,
-            calls: Self::parse_meta(&elf, &elf_buf)?,
+            layout: LayoutTable::default(), // calls: Self::parse_meta(&elf, &elf_buf)?,
         })
     }
-    
+
+    /*
     fn parse_meta(elf: &Elf, buf: &[u8]) -> anyhow::Result<Vec<CallMeta>> {
         let mut content: &[u8] = &[];
 
@@ -140,16 +139,61 @@ impl ExecBundle {
                 break;
             }
         }
-        
+
         if content.is_empty() {
             return Err(anyhow!("No metadata section found."));
         }
-        
+
         Ok(CallMeta::try_from_bytes_vec(&content)?)
+    }
+     */
+
+    fn build_layout_table_entry(
+        ph: &ProgramHeader,
+        allocated_size: u64,
+        elf: &Elf,
+    ) -> anyhow::Result<LayoutTableEntry> {
+        let p_start = ph.p_vaddr;
+        let p_end = ph.p_vaddr + ph.p_memsz;
+
+        // get segment -> section association and create entry in layout table
+        for sh in elf.section_headers.iter() {
+            // skip empty sections
+            if sh.sh_size == 0 {
+                continue;
+            }
+
+            let s_start = sh.sh_addr;
+            let s_end = sh.sh_addr + sh.sh_size;
+            if s_start >= p_start && s_end <= p_end {
+                let name = elf
+                    .shdr_strtab
+                    .get_at(sh.sh_name)
+                    .ok_or(anyhow!("unknown section"))?;
+                let flags = Flags::try_from(name).map_err(|e| anyhow!(e))?;
+                let size = allocated_size / DefaultAlign::ALIGNMENT;
+                if size > u16::MAX as u64 {
+                    return Err(anyhow!(
+                        "section {} too large: got {}, max is {}",
+                        name,
+                        size,
+                        u16::MAX
+                    ));
+                }
+
+                return Ok(LayoutTableEntry::empty()
+                    .set_addr(PhysAddr::new(s_start))
+                    .set_present(true)
+                    .set_flags(flags)
+                    .set_len(size as u16));
+            }
+        }
+
+        Err(anyhow!("no section found for segment"))
     }
 }
 
-pub(crate) fn check_minimal_file_requirements<P: AsRef<Path>>(path: P) -> anyhow::Result<()> {
+fn check_minimal_file_requirements<P: AsRef<Path>>(path: P) -> anyhow::Result<()> {
     let file_meta = match path.as_ref().metadata() {
         Ok(meta) => meta,
         Err(err) => return Err(anyhow!(LoadError::IO(err))),
@@ -161,7 +205,7 @@ pub(crate) fn check_minimal_file_requirements<P: AsRef<Path>>(path: P) -> anyhow
         )));
     }
 
-    // for 32bit systems: elf header + one program header must be at least present
+    // for 32bit systems: guest header + one program header must be at least present
     let min_size =
         elf::header::header32::SIZEOF_EHDR + elf::program_header::program_header32::SIZEOF_PHDR;
     if file_meta.len() < min_size as u64 {
@@ -175,7 +219,7 @@ pub(crate) fn check_minimal_file_requirements<P: AsRef<Path>>(path: P) -> anyhow
     Ok(())
 }
 
-pub(crate) fn check_platform_supported<B: AsRef<[u8]>>(buf: B) -> anyhow::Result<()> {
+fn check_platform_supported<B: AsRef<[u8]>>(buf: B) -> anyhow::Result<()> {
     let header: Header;
     match Elf::parse_header(buf.as_ref()) {
         Ok(result) => {

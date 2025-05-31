@@ -1,16 +1,20 @@
+use core::fmt::{Debug, Display};
+#[cfg(feature = "std")]
+use std::fmt::{Formatter, Write};
+
 pub trait Zero {
     /// zero sets all values to their respective 0 value
     fn zero(&mut self);
 }
 
-#[derive(Debug)]
 pub enum InterpretError {
     TooSmall(usize, usize),
     Misaligned(usize, usize),
 }
 
-impl std::fmt::Display for InterpretError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+#[cfg(feature = "std")]
+impl Debug for InterpretError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
             InterpretError::TooSmall(want, got) => {
                 write!(
@@ -26,7 +30,26 @@ impl std::fmt::Display for InterpretError {
     }
 }
 
-impl std::error::Error for InterpretError {}
+#[cfg(feature = "std")]
+impl Display for InterpretError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        match self {
+            InterpretError::TooSmall(want, got) => {
+                write!(
+                    f,
+                    "provided slice was to small: expected {} but got {}",
+                    want, got
+                )
+            }
+            InterpretError::Misaligned(want, got) => {
+                write!(f, "misaligned pointer: expected {} but got {}", want, got)
+            }
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl core::error::Error for InterpretError {}
 
 pub trait Interpret: Sized {
     /// Interpret a byte buffer as a struct.
@@ -68,9 +91,9 @@ fn fits<T>(buf: &[u8]) -> Result<(), InterpretError> {
 
 mod test {
     #![allow(unused)]
-    
-    use super::*;
 
+    use super::*;
+    
     #[repr(C, packed)]
     struct Dummy {
         foo: u8,
@@ -91,7 +114,10 @@ mod test {
     #[test]
     fn interpret_from_mut_bytes() {
         let mut buf = [0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8];
-        let d = Dummy::from_mut_bytes(buf.as_mut_slice()).unwrap();
+        let d = match Dummy::from_mut_bytes(buf.as_mut_slice()) {
+            Ok(d) => d,
+            Err(_) => unreachable!(),
+        };
 
         assert_eq!(0x1, d.foo);
         let bar = d.bar;

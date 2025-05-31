@@ -4,4 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bmvm-macros = {path = "../bmvm_macros" }
+bmvm-macros = { path = "../bmvm_macros" }
+bmvm-common = { path = "../bmvm_common" }
+x86_64 = { version = "0.15.2", default-features = false, features = [
+    "instructions",
+    "abi_x86_interrupt",
+] }
