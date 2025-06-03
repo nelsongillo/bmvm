@@ -5,7 +5,6 @@ fn main() {
     // ensure the build script is re-run if it changes
     println!("cargo:rerun-if-changed=build.rs");
 
-
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     // add the out directory to the link search path
     println!("cargo:rustc-link-search={}", out.display());

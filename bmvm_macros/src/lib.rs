@@ -38,4 +38,3 @@ pub fn expose_guest(attr: TokenStream, item: TokenStream) -> TokenStream {
 pub fn expose_host(attr: TokenStream, item: TokenStream) -> TokenStream {
     host::expose_impl(attr, item)
 }
-

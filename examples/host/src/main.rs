@@ -18,6 +18,4 @@ fn fooo(a: u32) {
     println!("{0:?}", a);
 }
 
-
-fn main() {
-}
+fn main() {}

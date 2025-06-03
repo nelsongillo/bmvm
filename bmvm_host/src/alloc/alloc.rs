@@ -1,8 +1,8 @@
 use crate::alloc::{Anon, Perm, Readable, Writable};
+use bmvm_common::mem::{Align, DefaultAlign, PhysAddr};
 use std::ops::{Deref, DerefMut};
 use std::panic;
 use std::slice;
-use bmvm_common::mem::{Align, DefaultAlign, PhysAddr};
 
 pub enum Error {
     /// Allocation of a new region failed due to the host being out of memory.
@@ -120,8 +120,8 @@ impl<P: Readable> Region<P> {
             return Err(Error::InvalidAddress(addr, self.physical_addr, self.size));
         }
 
-        if self.physical_addr.as_u64() + ( self.size as u64) < addr {
-        return Err(Error::InvalidAddress(addr, self.physical_addr, self.size));
+        if self.physical_addr.as_u64() + (self.size as u64) < addr {
+            return Err(Error::InvalidAddress(addr, self.physical_addr, self.size));
         }
 
         let offset = (addr - self.physical_addr.as_u64()) as usize;

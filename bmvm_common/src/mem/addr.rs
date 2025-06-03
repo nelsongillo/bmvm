@@ -41,7 +41,7 @@ impl PhysAddr {
     pub const fn as_u64(self) -> u64 {
         self.0
     }
-    
+
     #[inline]
     pub const fn as_virt_addr(self) -> VirtAddr {
         VirtAddr::new_truncate(self.0)

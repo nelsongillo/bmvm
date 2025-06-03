@@ -3,16 +3,15 @@ mod elf;
 mod linker;
 mod module;
 mod runtime;
-mod utils;
 mod setup;
+mod utils;
 
-use bmvm_common::mem::{align_ceil, DefaultAlign, PhysAddr};
-pub use bmvm_macros::{expose_guest as expose};
-#[cfg(feature = "std")]
-pub use bmvm_common::registry;
+use bmvm_common::mem::{DefaultAlign, PhysAddr, align_ceil};
 #[cfg(feature = "std")]
 pub use bmvm_common::meta;
-
+#[cfg(feature = "std")]
+pub use bmvm_common::registry;
+pub use bmvm_macros::expose_guest as expose;
 
 /// The default stack size for the guest (8MiB)
 pub(crate) const BMVM_GUEST_DEFAULT_STACK_SIZE: usize = 8 * 1024 * 1024;

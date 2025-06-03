@@ -1,22 +1,21 @@
-use sealed::sealed;
+use alloc::vec::Vec;
 use core::convert::TryFrom;
 use core::result::Result;
-use alloc::vec::Vec;
+use sealed::sealed;
 
 pub const META_PREFIX_HOST: &str = "BMVM_CALL_HOST_META_";
 pub const META_PREFIX_GUEST: &str = "BMVM_CALL_GUEST_META_";
 pub const LINK_META_NAME_HOST: &str = ".bmvm.call.host";
 pub const LINK_META_NAME_GUEST: &str = ".bmvm.call.guest";
 
-
 /// Functions intended for cross-boundary calls are only allowed to have a have parameters which implement the `Type` trait.
 /// This rule is enforced by the compiler via the `Params` trait.
 /// Currently, only 8, 16, 32 and 64 integer types are supported, in addition to `*const u8` pointer.
 #[sealed]
-pub trait Type:  {}
+pub trait Type {}
 
 /// Non `Type` types must implement this trait to be passed between host and guest.
-pub trait Serializable<'de>: serde::Deserialize<'de> +  serde::Serialize {}
+pub trait Serializable<'de>: serde::Deserialize<'de> + serde::Serialize {}
 
 macro_rules! impl_type {
     ($($s:tt = $t:ty),*) => {
@@ -66,7 +65,6 @@ impl_type!(
     Int64 = i64,
     Ptr = *const u8
 );
-
 
 pub trait Params {}
 pub trait Return<'de>: Serializable<'de> {}

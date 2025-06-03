@@ -2,7 +2,7 @@
 #![feature(alloc_error_handler)]
 extern crate alloc;
 
-use crate::mem::{PhysAddr, VirtAddr};
+use crate::mem::PhysAddr;
 
 pub mod hash;
 pub mod interprete;
@@ -12,7 +12,6 @@ pub mod mem;
 #[cfg(feature = "std")]
 pub mod meta;
 pub mod registry;
-
 
 /// The ELF section name for the metadata containing the call guest provided function information.
 pub const BMVM_META_SECTION: &str = ".bmvm.call.host";

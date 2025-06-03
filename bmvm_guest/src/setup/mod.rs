@@ -1,4 +1,3 @@
-
 /*
 TODO:
  - setup idt
@@ -8,11 +7,11 @@ TODO:
  - setup heap
  - setup host-calls
  */
-use core::ops::BitAnd;
+use crate::panic::exit_with_code;
 use bmvm_common::error::ExitCode;
 use bmvm_common::interprete::Interpret;
 use bmvm_common::mem::{Flags, LayoutTable, LayoutTableEntry};
-use crate::panic::{exit_with_code};
+use core::ops::BitAnd;
 
 mod gdt;
 mod idt;
@@ -27,7 +26,6 @@ pub extern "C" fn _start() -> ! {
 
     exit_with_code(code)
 }
-
 
 /// The address of the memory info structure, which must be present on initialization.
 /// The info table will span at max 1 page

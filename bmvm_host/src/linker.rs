@@ -1,7 +1,3 @@
-struct Func {
-    
-}
+struct Func {}
 
-struct Linker {
-    
-}
+struct Linker {}

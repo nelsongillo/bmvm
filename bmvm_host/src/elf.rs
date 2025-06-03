@@ -1,7 +1,9 @@
 use crate::alloc::*;
 
 use anyhow::anyhow;
-use bmvm_common::mem::{align_ceil, align_floor, Align, DefaultAlign, Flags, LayoutTable, LayoutTableEntry, PhysAddr};
+use bmvm_common::mem::{
+    Align, DefaultAlign, Flags, LayoutTable, LayoutTableEntry, PhysAddr, align_ceil, align_floor,
+};
 use goblin::elf;
 use goblin::elf::{Elf, Header, ProgramHeader};
 use goblin::elf32::header::machine_to_str;
@@ -181,11 +183,11 @@ impl ExecBundle {
                     ));
                 }
 
-                return Ok(LayoutTableEntry::empty()
-                    .set_addr(PhysAddr::new(s_start))
-                    .set_present(true)
-                    .set_flags(flags)
-                    .set_len(size as u16));
+                return Ok(LayoutTableEntry::new(
+                    PhysAddr::new(p_start),
+                    size as u32,
+                    flags | Flags::PRESENT,
+                ));
             }
         }
 

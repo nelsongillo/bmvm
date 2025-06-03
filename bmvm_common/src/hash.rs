@@ -12,7 +12,6 @@ pub trait Djb2 {
 pub struct Djb232(u32);
 
 impl Djb232 {
-
     pub fn new() -> Self {
         // 5381 is the initial hash value for DJB2
         Self(Self::OFFSET)
@@ -29,27 +28,25 @@ impl Djb2 for Djb232 {
                 .0
                 .wrapping_shl(5)
                 .wrapping_add(self.0)
-                .wrapping_add(byte.clone() as  Self::Output);
+                .wrapping_add(byte.clone() as Self::Output);
         }
     }
 
-    fn finish(self) ->  Self::Output {
+    fn finish(self) -> Self::Output {
         self.0
     }
 
-    fn hash(input: &[u8]) ->  Self::Output {
+    fn hash(input: &[u8]) -> Self::Output {
         let mut hasher = Djb232::new();
         hasher.write(input);
         hasher.finish()
     }
 }
 
-
 /// variation on the DJB2 hash algorithm limited to 32bit integer
 pub struct Djb264(u64);
 
 impl Djb264 {
-
     pub fn new() -> Self {
         Self(Self::OFFSET)
     }
@@ -58,7 +55,6 @@ impl Djb264 {
 impl Djb2 for Djb264 {
     type Output = u64;
     const OFFSET: Self::Output = 5381;
-
 
     fn write(&mut self, input: &[u8]) {
         for byte in input.iter() {
@@ -74,7 +70,7 @@ impl Djb2 for Djb264 {
         self.0
     }
 
-    fn hash(input: &[u8]) ->  Self::Output {
+    fn hash(input: &[u8]) -> Self::Output {
         let mut hasher = Djb264::new();
         hasher.write(input);
         hasher.finish()

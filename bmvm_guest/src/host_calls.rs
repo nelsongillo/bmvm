@@ -1,3 +1,1 @@
-pub fn exec_hypercall() {
-    
-}
+pub fn exec_hypercall() {}

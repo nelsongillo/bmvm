@@ -18,7 +18,7 @@ pub(crate) fn setup(table: &LayoutTable, sys: LayoutTableEntry) -> Result<(), Ex
         if !table.entries[i].is_present() {
             if i == 0 {
                 // there must be at least one entry present
-                return Err(ExitCode::InvalidMemoryLayout)
+                return Err(ExitCode::InvalidMemoryLayout);
             }
             // break if the last entry is reached
             break;
@@ -55,7 +55,7 @@ where
                 let flush = mapper.identity_map(frame, flags, allocator)?;
                 flush.flush();
 
-                addr += Page1GiB::ALIGNMENT;;
+                addr += Page1GiB::ALIGNMENT;
             },
             _ if aligned_and_fits::<Page2MiB>(addr.as_u64(), end.as_u64()) => unsafe {
                 flags |= PageTableFlags::HUGE_PAGE;

@@ -1,7 +1,6 @@
 use x86_64::PhysAddr;
 use x86_64::structures::paging::{FrameAllocator, FrameDeallocator, PageSize, PhysFrame};
 
-
 // #[call_host]
 unsafe extern "C" {
     fn alloc(size: u64) -> u64;

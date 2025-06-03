@@ -1,7 +1,7 @@
-use anyhow::anyhow;
-use std::ffi::CString;
-use core::ops::Not;
 use crate::hash::{Djb2, Djb232};
+use anyhow::anyhow;
+use core::ops::Not;
+use std::ffi::CString;
 
 pub const STATIC_META_NAME_PREFIX: &str = "BMVM_CALL_HOST_META_";
 pub const LINK_SECTION_META_NAME: &str = ".bmvm.call.host";
@@ -60,7 +60,7 @@ impl CallMeta {
 
     pub fn new(argv: Vec<DataType>, fn_name: &str) -> anyhow::Result<Self> {
         if argv.len() > u8::MAX as usize {
-            return Err(anyhow!("argv must not be longer than u8::MAX"))
+            return Err(anyhow!("argv must not be longer than u8::MAX"));
         }
 
         let mut hasher = Djb232::new();

@@ -5,8 +5,8 @@ struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Config{
-            stack_size: 2 * 1024 * 1024, // 2MiB
+        Config {
+            stack_size: 2 * 1024 * 1024,   // 2MiB
             max_memory: 128 * 1024 * 1024, // 128MiB
         }
     }
@@ -18,7 +18,7 @@ struct ConfigBuilder {
 
 impl ConfigBuilder {
     pub fn new() -> Self {
-        ConfigBuilder{
+        ConfigBuilder {
             config: Config::default(),
         }
     }
@@ -38,16 +38,12 @@ impl ConfigBuilder {
     }
 }
 
-struct Runtime {
-
-}
+struct Runtime {}
 
 impl Runtime {
     pub fn new() -> Self {
-        Runtime{}
+        Runtime {}
     }
-    
-    
 
     pub fn run(&mut self) -> anyhow::Result<()> {
         Ok(())

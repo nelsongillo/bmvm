@@ -93,7 +93,7 @@ mod test {
     #![allow(unused)]
 
     use super::*;
-    
+
     #[repr(C, packed)]
     struct Dummy {
         foo: u8,

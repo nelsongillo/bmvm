@@ -1,8 +1,10 @@
-use anyhow::anyhow;
 use crate::interprete::{Interpret, Zero};
 use crate::mem::{Align, DefaultAlign, PhysAddr};
 use bitflags::bitflags;
 use x86_64::structures::paging::PageTableFlags;
+
+#[cfg(feature = "std")]
+use anyhow::anyhow;
 
 #[repr(C)]
 pub struct LayoutTable {
@@ -15,9 +17,17 @@ impl LayoutTable {
     }
 
     #[cfg(feature = "std")]
+    pub fn len_present(&self) -> usize {
+        self.as_vec_present().len()
+    }
+
+    #[cfg(feature = "std")]
     pub fn from_vec(vec: &Vec<LayoutTableEntry>) -> anyhow::Result<LayoutTable> {
         if vec.len() > 512 {
-            return Err(anyhow!("laoyut table cannot contain more than 512 entries: got {}", vec.len()))
+            return Err(anyhow!(
+                "layout table cannot contain more than 512 entries: got {}",
+                vec.len()
+            ));
         }
         let mut l = LayoutTable::new();
         let idx = 0;
@@ -28,12 +38,12 @@ impl LayoutTable {
     }
 
     #[cfg(feature = "std")]
-    pub fn as_vec(&self) -> Vec<LayoutTableEntry> {
+    pub fn as_vec_present(&self) -> Vec<LayoutTableEntry> {
         self.entries
             .iter()
             .filter(|e| e.is_present())
             .map(|e| e.clone())
-            .collect::<Vec<_>>()
+            .collect::<Vec<LayoutTableEntry>>()
     }
 }
 
@@ -74,19 +84,20 @@ impl Iterator for LayoutTableIter<'_> {
 
 bitflags! {
     pub struct Flags: u8 {
+        /// Indicates the entrys presence.
+        const PRESENT = 1;
         ///  0 -> User; 1 -> System structures
-        const SYSTEM = 0b0000_0001;
+        const SYSTEM = 1 << 1;
         /// 0 -> Data; 1 -> Code/Executable
-        const CODE = 0b0000_0010;
+        const CODE = 1 << 2;
         /// 0 -> Read; 1 -> Write
-        const WRITE = 0b0000_0100;
+        const WRITE = 1 << 3;
         // const have no real purpose besides making it more explicit to create
         // eg: a user read only data section. Using USER | READ | DATA is the same as Flags::empty()
         // but more explicit.
-        const USER = 0b0000_0000;
-        const READ = 0b0000_0000;
-        const DATA = 0b0000_0000;
-
+        const USER = 0 << 1;
+        const DATA = 0 << 2;
+        const READ = 0 << 3;
     }
 }
 
@@ -148,26 +159,33 @@ pub struct LayoutTableEntry(u64);
 /// 8-24: multiplicator of pages
 /// 24-63: starting address
 impl LayoutTableEntry {
-    const MASK_PRESENT: u64 = 1;
-    const MASK_FLAGS: u64 = 0xfe;
-    const MASK_SIZE: u64 = 0xffff00;
-    const MASK_ADDR: u64 = 0xffff_ffff_ff00_0000;
+    const MASK_RETRIEVE_FLAGS: u64 = 0x0000_0000_0000_00ff;
+    const MASK_RETRIEVE_SIZE: u64 = 0x0000_0000_0fff_ff00;
+    const MASK_RETRIEVE_ADDR: u64 = 0xffff_ffff_f000_0000;
 
     /// Creates a new LayoutTableEntry with the given parameters.
     ///
     /// # Parameters
-    pub fn new(addr: PhysAddr, size: u16, flags: Flags) -> Self {
+    /// * `addr` - The physical address, where the region should start. Must be a valid paged aligned physical address.
+    /// * `size` - Indicates the number of pages the region is spanning. Limited to 20bit, resulting in maximal 4GiB big regions.
+    /// * `flags` - The flags mark the entry for a specific use-case, which will result in the equivalent paging flags.
+    pub fn new(addr: PhysAddr, size: u32, flags: Flags) -> Self {
+        assert!(
+            DefaultAlign::is_aligned(addr.as_u64()),
+            "addr must be page aligned"
+        );
         assert_ne!(0, size, "size must not be zero");
-        // init with the present bit set
-        let mut value = 0 | Self::MASK_PRESENT;
-
-        // set the flags
-        value |= (flags.bits() as u64) << 1;
+        assert_eq!(
+            size,
+            size & (Self::MASK_RETRIEVE_SIZE >> 8) as u32,
+            "size must not exceed 20 bits"
+        );
+        let mut value = flags.bits() as u64;
 
         // set the size
         value |= (size as u64) << 8;
         // set the address
-        value |= (addr.as_u64()) << 12;
+        value |= (addr.as_u64()) << 16;
 
         LayoutTableEntry(value)
     }
@@ -177,46 +195,49 @@ impl LayoutTableEntry {
         LayoutTableEntry(0)
     }
 
-    pub fn set_present(mut self, present: bool) -> Self {
-        if present {
-            self.0 |= Self::MASK_PRESENT;
-        } else {
-            self.0 &= !Self::MASK_PRESENT;
-        }
+    pub fn set_present(&mut self, present: bool) -> &mut Self {
+        let mut flags = self.flags();
+        flags.set(Flags::PRESENT, present);
+        self.set_flags(flags)
+    }
+
+    pub fn set_flags(&mut self, flags: Flags) -> &mut Self {
+        self.0 &= !Self::MASK_RETRIEVE_FLAGS;
+        self.0 |= flags.bits() as u64;
         self
     }
 
-    pub fn set_flags(mut self, flags: Flags) -> Self {
-        self.0 &= !Self::MASK_FLAGS;
-        self.0 |= (flags.bits() as u64) << 1;
-        self
-    }
-
-    pub fn set_len(mut self, size: u16) -> Self {
-        self.0 &= !Self::MASK_SIZE;
+    pub fn set_len(&mut self, size: u32) -> &mut Self {
+        self.0 &= !Self::MASK_RETRIEVE_SIZE;
         self.0 |= (size as u64) << 8;
         self
     }
 
-    pub fn set_addr(mut self, addr: PhysAddr) -> Self {
-        self.0 &= !Self::MASK_ADDR;
-        self.0 |= (addr.as_u64()) << 12;
+    pub fn set_addr(&mut self, addr: PhysAddr) -> &mut Self {
+        assert!(
+            DefaultAlign::is_aligned(addr.as_u64()),
+            "addr must be page aligned"
+        );
+        self.0 &= !Self::MASK_RETRIEVE_ADDR;
+        self.0 |= (addr.as_u64()) << 16;
         self
     }
 
     /// Checks if the entry is present
     pub fn is_present(&self) -> bool {
-        (self.0 & Self::MASK_PRESENT) > 0
+        let f = self.flags();
+        let b = f.contains(Flags::PRESENT);
+        b
     }
 
     pub fn flags(&self) -> Flags {
-        let f = (self.0 & Self::MASK_FLAGS) > 1;
+        let f = self.0 & Self::MASK_RETRIEVE_FLAGS;
         Flags::from_bits_retain(f as u8)
     }
 
-    /// Gets the amount of pages included in the entry
-    pub fn len(&self) -> u16 {
-        ((self.0 & Self::MASK_SIZE) >> 8) as u16
+    /// Gets the number of pages included in the entry
+    pub fn len(&self) -> u32 {
+        ((self.0 & Self::MASK_RETRIEVE_SIZE) >> 8) as u32
     }
 
     /// Returns the size of the entry in bytes
@@ -226,7 +247,7 @@ impl LayoutTableEntry {
 
     /// Returns the starting address
     pub fn addr(&self) -> PhysAddr {
-        PhysAddr::new((self.0 & Self::MASK_ADDR) >> 12)
+        PhysAddr::new((self.0 & Self::MASK_RETRIEVE_ADDR) >> 16)
     }
 }
 
@@ -242,9 +263,9 @@ mod test {
 
     #[test]
     fn layout_table_entry_new() {
-        let addr = PhysAddr::new(0x000123456789a000);
+        let addr = PhysAddr::new(0x0000_1234_5678_9000);
         let entry = LayoutTableEntry::new(addr, 0x1234, Flags::empty());
-        assert_eq!(0x123456789a123401, entry.0, "got {:x}", entry.0);
+        assert_eq!(0x1234567890123400, entry.0, "got {:x}", entry.0);
         assert_eq!(
             addr.as_u64(),
             entry.addr().as_u64(),
@@ -252,17 +273,28 @@ mod test {
             entry.addr().as_u64()
         );
         assert_eq!(Flags::empty().bits(), entry.flags().bits());
-        assert_eq!(0x1234, entry.size());
-        assert!(entry.is_present());
+        assert_eq!(0x1234, entry.len());
+        assert!(!entry.is_present());
     }
 
     #[test]
     fn layout_table_entry_build() {
-        let entry = LayoutTableEntry::empty()
-            .set_present(true)
-            .set_len(0x1234)
-            .set_flags(Flags::CODE)
-            .set_addr(PhysAddr::new(0x000123456789a123)); // check for correct truncation
-        assert_eq!(0x123456789a123403, entry.0, "got {:x}", entry.0);
+        let mut entry = LayoutTableEntry::empty();
+        entry
+            .set_len(0xabcde)
+            .set_flags(Flags::CODE | Flags::PRESENT)
+            .set_addr(PhysAddr::new(0x0000123456789000)); // check for correct truncation
+        assert_eq!(0x123456789abcde05, entry.0, "got {:x}", entry.0);
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn layout_len() {
+        let mut layout = LayoutTable::default();
+        for i in 0..5 {
+            layout.entries[i].set_present(true);
+        }
+
+        assert_eq!(5, layout.len_present())
     }
 }

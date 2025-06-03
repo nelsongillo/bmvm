@@ -1,18 +1,15 @@
-/// This is a quick wrapper for the DefaultAlign::align_floor function
-pub fn align_floor(addr: u64) -> u64 {
-    DefaultAlign::align_floor(addr)
+/// This is a quick const wrapper for the DefaultAlign::align_floor function
+pub const fn align_floor(addr: u64) -> u64 {
+    x86_64::align_down(addr, DefaultAlign::ALIGNMENT)
 }
 
-/// This is a quick wrapper for the DefaultAlign::align_ceil function
-pub fn align_ceil(addr: u64) -> u64 {
-    DefaultAlign::align_ceil(addr)
+/// This is a quick const wrapper for the DefaultAlign::align_ceil function
+pub const fn align_ceil(addr: u64) -> u64 {
+    x86_64::align_up(addr, DefaultAlign::ALIGNMENT)
 }
-
-
 
 /// Trait to abstract over different page sizes based on the underlying architecture.
 pub trait Align: Copy + Eq + PartialEq + PartialOrd + Ord {
-    /// The page size in bytes.
     const ALIGNMENT: u64;
 
     fn is_aligned(addr: u64) -> bool {

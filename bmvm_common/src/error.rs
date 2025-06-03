@@ -1,5 +1,5 @@
-use x86_64::structures::paging::mapper::MapToError;
 use x86_64::structures::paging::PageSize;
+use x86_64::structures::paging::mapper::MapToError;
 
 pub enum ExitCode {
     Normal = 0,
@@ -13,7 +13,7 @@ pub enum ExitCode {
     ParentEntryHugePage = 4,
     /// The given page is already mapped to a physical frame.
     PageAlreadyMapped = 5,
-    Unknown = 255
+    Unknown = 255,
 }
 
 impl<S: PageSize> From<MapToError<S>> for ExitCode {
