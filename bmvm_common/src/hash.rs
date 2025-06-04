@@ -82,16 +82,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_djb2() {
+    fn djb2_32() {
         let zero = Djb232::new();
-        assert_eq!(zero.finish(), 5381);
+        assert_eq!(5381, zero.finish());
 
         let mut hello_en = Djb232::new();
         hello_en.write("hello".as_bytes());
-        assert_eq!(hello_en.finish(), 261238937);
+        assert_eq!(261238937, hello_en.finish());
 
         let mut hello_de = Djb232::new();
         hello_de.write("hallo".as_bytes());
-        assert_eq!(hello_de.finish(), 261095189);
+        assert_eq!(261095189, hello_de.finish());
+    }
+
+    #[test]
+    fn djb2_64() {
+        let zero = Djb264::new();
+        assert_eq!(5381, zero.finish());
+
+        let mut hello_en = Djb264::new();
+        hello_en.write("hello".as_bytes());
+        assert_eq!(210714636441, hello_en.finish());
+
+        let mut hello_de = Djb264::new();
+        hello_de.write("hallo".as_bytes());
+        assert_eq!(210714492693, hello_de.finish());
     }
 }

@@ -46,6 +46,14 @@ impl LayoutTable {
             .map(|e| e.clone())
             .collect::<Vec<LayoutTableEntry>>()
     }
+
+    pub fn find_intersect(&self, flag: Flags) -> Option<(usize, LayoutTableEntry)> {
+        self.entries
+            .iter()
+            .enumerate()
+            .find(|(_, e)| e.flags().intersects(flag))
+            .map(|(i, e)| (i, e.clone()))
+    }
 }
 
 pub struct LayoutTableIter<'a> {
@@ -84,6 +92,7 @@ impl Iterator for LayoutTableIter<'_> {
 }
 
 bitflags! {
+    #[derive(Copy, Clone)]
     pub struct Flags: u8 {
         /// Indicates the entrys presence.
         const PRESENT = 1;

@@ -9,6 +9,7 @@ use goblin::elf::{Elf, Header, ProgramHeader};
 use goblin::elf32::header::machine_to_str;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::Path;
 
 macro_rules! info {
@@ -72,7 +73,7 @@ pub struct ExecBundle {
 }
 
 impl ExecBundle {
-    pub fn new<P: AsRef<Path>>(path: P, manager: impl Manager) -> anyhow::Result<ExecBundle> {
+    pub fn new<P: AsRef<Path>>(path: P, manager: &Manager) -> anyhow::Result<ExecBundle> {
         // early exit if minimal requirements are not met
         check_minimal_file_requirements(&path)?;
         let elf_buf = fs::read(&path)?;
@@ -104,7 +105,8 @@ impl ExecBundle {
             layout_idx += 1;
 
             // allocate + copy file content to region
-            let mut mem = manager.allocate::<ReadWrite>(to_alloc)?;
+            let req_capacity = NonZeroUsize::new(to_alloc as usize).unwrap();
+            let mut mem = manager.allocate::<ReadWrite>(req_capacity)?;
             let to_cpy =
                 &elf_buf[ph.p_offset as usize..(ph.p_offset as usize + ph.p_filesz as usize)];
             let region_offset = ph.p_vaddr - p_start;

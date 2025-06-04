@@ -1,6 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![feature(alloc_error_handler)]
 extern crate alloc;
+extern crate core;
 
 use crate::mem::PhysAddr;
 
@@ -32,7 +33,3 @@ pub const BMVM_TMP_IDT: PhysAddr = PhysAddr::new(0x2000);
 /// be replaced by the guest (optionally at a different, as this memory region is not write
 /// protected against the host)
 pub const BMVM_TMP_PAGING: PhysAddr = PhysAddr::new(0x3000);
-
-/// The beginning of the .text segment should be at least 0x400000. This is similar to the x86_64
-/// convention (https://refspecs.linuxfoundation.org/elf/x86_64-abi-0.99.pdf).
-pub const BMVM_MIN_TEXT_SEGMENT: PhysAddr = PhysAddr::new(0x400000);
