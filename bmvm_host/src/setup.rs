@@ -117,14 +117,13 @@ mod test {
     #![allow(unused, dead_code)]
 
     use super::*;
-    use bmvm_common::mem::PhysAddr;
+    use bmvm_common::mem::{Page1GiB, Page2MiB, Page4KiB, PhysAddr};
 
-    const BASE_ADDRESS: PhysAddr = PhysAddr::new_truncate(0x20_0000); // 2MiB
 
     #[test]
     fn estimate_sys_region_single_region() {
         let base = LayoutTable::from_vec(&vec![LayoutTableEntry::new(
-            BASE_ADDRESS,
+            PhysAddr::new_truncate(0x20_0000),
             0x4_0000, // results in 1 GiB region
             Flags::PRESENT,
         )])
@@ -132,5 +131,30 @@ mod test {
 
         assert_eq!((1, 1, 2, 0), estimate_page_count(&base.as_vec_present()));
         assert_eq!(9, estimate_sys_region(&base).unwrap().len());
+    }
+
+    #[test]
+    fn estimate_sys_region_multiple_regions() {
+        let base = LayoutTable::from_vec(&vec![
+            LayoutTableEntry::new(
+                PhysAddr::new_truncate(0x20_0000),
+                0x4_0000, // results in 1 GiB region
+                Flags::PRESENT,
+            ),
+            LayoutTableEntry::new(
+                PhysAddr::new_truncate(Page1GiB::ALIGNMENT * 1024),
+                1, // results in 4 KiB region
+                Flags::PRESENT,
+            ),
+            LayoutTableEntry::new(
+                PhysAddr::new_truncate(Page1GiB::ALIGNMENT * 511 + Page2MiB::ALIGNMENT + Page4KiB::ALIGNMENT * 4),
+                0x40204, // results in 1GiB + 4MiB + 1 KiB region
+                Flags::PRESENT,
+            ),
+        ])
+        .unwrap();
+
+        assert_eq!((1, 3, 5, 3), estimate_page_count(&base.as_vec_present()));
+        assert_eq!(17, estimate_sys_region(&base).unwrap().len());
     }
 }
