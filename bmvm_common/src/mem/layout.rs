@@ -30,9 +30,10 @@ impl LayoutTable {
             ));
         }
         let mut l = LayoutTable::new();
-        let idx = 0;
+        let mut idx = 0;
         for e in vec.iter() {
             l.entries[idx] = *e;
+            idx += 1;
         }
         Ok(l)
     }
