@@ -68,7 +68,7 @@ impl std::error::Error for LoadError {}
 pub struct ExecBundle {
     pub mem_regions: Vec<Region<ReadWrite>>,
     pub entry_point: u64,
-    pub layout: LayoutTable,
+    pub layout: Vec<LayoutTableEntry>,
     // pub calls: Vec<CallMeta>,
 }
 
@@ -84,8 +84,7 @@ impl ExecBundle {
         let elf = Elf::parse(&elf_buf)?;
 
         let mut mem_regions: Vec<Region<ReadWrite>> = Vec::new();
-        let mut layout = LayoutTable::default();
-        let mut layout_idx = 0;
+        let mut layout: Vec<LayoutTableEntry> = Vec::new();
 
         // | code | data | heap | ...
         // iterate through all PH_LOAD header and build buffer
@@ -101,8 +100,7 @@ impl ExecBundle {
             let to_alloc = p_end - p_start;
 
             // try creating a layout entry for this segment
-            layout.entries[layout_idx] = Self::build_layout_table_entry(ph, to_alloc, &elf)?;
-            layout_idx += 1;
+            layout.push(Self::build_layout_table_entry(ph, to_alloc, &elf)?);
 
             // allocate + copy file content to region
             let req_capacity = NonZeroUsize::new(to_alloc as usize).unwrap();
@@ -118,7 +116,7 @@ impl ExecBundle {
         Ok(ExecBundle {
             mem_regions,
             entry_point: elf.header.e_entry,
-            layout: LayoutTable::default(), // calls: Self::parse_meta(&elf, &elf_buf)?,
+            layout, // calls: Self::parse_meta(&elf, &elf_buf)?,
         })
     }
 

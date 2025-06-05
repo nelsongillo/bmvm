@@ -36,10 +36,15 @@ impl PhysAddr {
     }
 
     /// Converts the address to an `u64`.
-
     #[inline]
     pub const fn as_u64(self) -> u64 {
         self.0
+    }
+
+    /// Converts the address to an `usize`.
+    #[inline]
+    pub const fn as_usize(self) -> usize {
+        self.0 as usize
     }
 
     #[inline]

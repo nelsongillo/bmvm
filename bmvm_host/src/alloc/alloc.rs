@@ -1,4 +1,4 @@
-use crate::alloc::{Anon, Perm, Readable, Writable, WriteOnly, ReadOnly, ReadWrite};
+use crate::alloc::{GuestOnly, Perm, ReadOnly, ReadWrite, WriteOnly};
 use bmvm_common::mem::{Align, DefaultAlign, PhysAddr};
 use core::ffi::c_void;
 use kvm_bindings::kvm_create_guest_memfd;
@@ -106,117 +106,27 @@ impl<P: Perm, A: Align> Drop for Region<P, A> {
     }
 }
 
-impl<P: Readable> Region<P> {
-    /// `read_offset` is like read, but tries to read from a given offset in the page.
-    /// An offset of 0 indicates the beginning of the page
-    pub fn read_offset(&self, offset: usize, buf: &mut [u8]) -> Result<usize, Error> {
-        if offset > self.capacity {
-            return Err(Error::InvalidOffset(offset, self.capacity));
-        }
+impl Region<GuestOnly> {}
 
-        // early exit if buffer length is 0
-        if buf.len() == 0 {
-            return Ok(0);
-        }
-
-        // Copy data into the memory-mapped region
-        let to_copy = if buf.len() > self.capacity - offset {
-            self.capacity - offset
-        } else {
-            buf.len()
-        };
-        buf.copy_from_slice(&self.deref()[offset..(offset + to_copy)]);
-        Ok(to_copy)
-    }
-
-    /// `read_abs` is like `read`, but tries to start reading based on the absolute address.
-    /// If the provided address is not included in the region address space, an Error will be returned.
-    fn read_addr(&self, addr: u64, buf: &mut [u8]) -> Result<usize, Error> {
-        if self.physical_addr.is_none() {
-            return Err(Error::GuestAddressNotSet);
-        }
-
-        let guest = self.physical_addr.unwrap();
-        if guest.as_u64() < addr {
-            return Err(Error::InvalidAddress(addr, guest, self.capacity));
-        }
-
-        if guest.as_u64() + (self.capacity as u64) < addr {
-            return Err(Error::InvalidAddress(addr, guest, self.capacity));
-        }
-
-        let offset = (addr - guest.as_u64()) as usize;
-        self.read_offset(offset, buf)
-    }
-}
-
-impl<P: Writable> Region<P> {
-    /// `write_offset` is like `write`, but tries to start writing at the given offset in the page.
-    /// An offset of 0 indicates the beginning of the page.
-    pub fn write_offset(&mut self, offset: usize, buf: &[u8]) -> Result<usize, Error> {
-        if offset > self.capacity {
-            return Err(Error::InvalidOffset(offset, self.capacity));
-        }
-
-        // early exit if the buffer is empty
-        if buf.is_empty() {
-            return Ok(0);
-        }
-
-        // Calculate the amount of data that can be written
-        let fit = self.capacity - offset;
-        let data = &buf[..fit];
-
-        // Copy data into the memory-mapped region
-        self.deref_mut()[offset..(offset + data.len())].copy_from_slice(data);
-        Ok(fit)
-    }
-
-    /// `write_abs` is like `write`, but tries to start writing based on the absolute address.
-    /// If the provided address is not included in the region address space, an Error will be returned.
-    fn write_addr(&mut self, addr: u64, buf: &[u8]) -> Result<usize, Error> {
-        if self.physical_addr.is_none() {
-            return Err(Error::GuestAddressNotSet);
-        }
-
-        let guest = self.physical_addr.unwrap();
-        if guest.as_u64() < addr {
-            return Err(Error::InvalidAddress(addr, guest, self.capacity));
-        }
-
-        if guest.as_u64() + (self.capacity as u64) < addr {
-            return Err(Error::InvalidAddress(addr, guest, self.capacity));
-        }
-
-        let offset = (addr - guest.as_u64()) as usize;
-        self.write_offset(offset, buf)
-    }
-}
-
-impl<P: Anon> Region<P> {}
-
-impl<A: Align> Deref for Region<ReadOnly, A> {
-    type Target = [u8];
-
-    #[inline]
-    fn deref(&self) -> &[u8] {
-        assert!(matches!(self.storage, StorageBackend::Mmap { .. }));
-        let StorageBackend::Mmap(ptr) = self.storage;
-        unsafe { slice::from_raw_parts(ptr.as_ptr(), self.capacity) }
-    }
-}
-
-macro_rules! impl_deref_for_structs {
+macro_rules! impl_ref_traits_for_region {
     ($($struct:ty),* $(,)?) => {
         $(
             impl<A: Align> Deref for Region<$struct, A> {
                 type Target = [u8];
 
                 #[inline]
-                fn deref(&self) -> &Self::Target {
-                    assert!(matches!(self.storage, StorageBackend::Mmap { .. }));
-                    let StorageBackend::Mmap(ptr) = self.storage;
-                    unsafe { slice::from_raw_parts(ptr.as_ptr(), self.capacity) }
+                fn deref(&self) -> &[u8] {
+                    match self.storage {
+                        StorageBackend::GuestMem(_) => {
+                            panic!("deref on guest memory");
+                        },
+                        StorageBackend::Mmap(ptr) if ptr.as_ptr().is_null() => {
+                            panic!("deref on null pointer");
+                        }
+                        StorageBackend::Mmap(ptr) => {
+                            unsafe { slice::from_raw_parts(ptr.as_ptr(), self.capacity) }
+                        }
+                    }
                 }
             }
 
@@ -230,23 +140,82 @@ macro_rules! impl_deref_for_structs {
     };
 }
 
-impl_deref_for_structs!(ReadOnly, WriteOnly, ReadWrite);
+macro_rules! impl_read_for_region {
+    ($($struct:ty),* $(,)?) => {
+        $(
+            impl<A: Align> Region<$struct, A> {
+                /// `read_offset` is like read, but tries to read from a given offset in the page.
+                /// An offset of 0 indicates the beginning of the page
+                pub fn read_offset(&self, offset: usize, buf: &mut [u8]) -> Result<usize, Error> {
+                    if offset > self.capacity {
+                        return Err(Error::InvalidOffset(offset, self.capacity));
+                    }
 
-macro_rules! impl_deref_mut_for_structs {
+                    // early exit if buffer length is 0
+                    if buf.len() == 0 {
+                        return Ok(0);
+                    }
+
+                    // Copy data into the memory-mapped region
+                    let to_copy = if buf.len() > self.capacity - offset {
+                        self.capacity - offset
+                    } else {
+                        buf.len()
+                    };
+                    buf.copy_from_slice(&self.as_ref()[offset..(offset + to_copy)]);
+                    Ok(to_copy)
+                }
+
+                /// `read_abs` is like `read`, but tries to start reading based on the absolute address.
+                /// If the provided address is not included in the region address space, an Error will be returned.
+                fn read_addr(&self, addr: u64, buf: &mut [u8]) -> Result<usize, Error> {
+                    if self.physical_addr.is_none() {
+                        return Err(Error::GuestAddressNotSet);
+                    }
+
+                    let guest = self.physical_addr.unwrap();
+                    if guest.as_u64() < addr {
+                        return Err(Error::InvalidAddress(addr, guest, self.capacity));
+                    }
+
+                    if guest.as_u64() + (self.capacity as u64) < addr {
+                        return Err(Error::InvalidAddress(addr, guest, self.capacity));
+                    }
+
+                    let offset = (addr - guest.as_u64()) as usize;
+                    self.read_offset(offset, buf)
+                }
+            }
+        )*
+    };
+}
+
+impl_ref_traits_for_region!(ReadOnly, WriteOnly, ReadWrite);
+impl_read_for_region!(ReadOnly, ReadWrite);
+
+macro_rules! impl_ref_mut_traits_for_structs {
     ($($struct:ty),* $(,)?) => {
         $(
             impl<A: Align> DerefMut for Region<$struct, A> {
                 #[inline]
-                fn deref_mut(&mut self) -> &mut Self::Target {
-                    assert!(matches!(self.storage, StorageBackend::Mmap { .. }));
-                    let StorageBackend::Mmap(ptr) = self.storage;
-                    unsafe { slice::from_raw_parts_mut(ptr.as_ptr(), self.capacity) }
+                fn deref_mut(&mut self) -> &mut [u8] {
+                    match self.storage {
+                        StorageBackend::GuestMem(_) => {
+                            panic!("deref_mut on guest memory");
+                        },
+                        StorageBackend::Mmap(ptr) if ptr.as_ptr().is_null() => {
+                            panic!("deref_mut on null pointer");
+                        }
+                        StorageBackend::Mmap(mut ptr) => {
+                            unsafe { slice::from_raw_parts_mut(ptr.as_mut(), self.capacity) }
+                        }
+                    }
                 }
             }
 
             impl<A: Align> AsMut<[u8]> for Region<$struct, A> {
                 #[inline]
-                fn as_mut(&self) -> &mut [u8] {
+                fn as_mut(&mut self) -> &mut [u8] {
                     self.deref_mut()
                 }
             }
@@ -254,15 +223,65 @@ macro_rules! impl_deref_mut_for_structs {
     };
 }
 
-impl_deref_mut_for_structs!(WriteOnly, ReadWrite);
+macro_rules! impl_write_for_region {
+    ($($struct:ty),* $(,)?) => {
+        $(
+            impl<A: Align> Region<$struct, A> {
+                /// `write_offset` is like `write`, but tries to start writing at the given offset in the page.
+                /// An offset of 0 indicates the beginning of the page.
+                pub fn write_offset(&mut self, offset: usize, buf: &[u8]) -> Result<usize, Error> {
+                    if offset > self.capacity {
+                        return Err(Error::InvalidOffset(offset, self.capacity));
+                    }
+
+                    // early exit if the buffer is empty
+                    if buf.is_empty() {
+                        return Ok(0);
+                    }
+
+                    // Calculate the amount of data that can be written
+                    let fit = self.capacity - offset;
+                    let data = &buf[..fit];
+
+                    // Copy data into the memory-mapped region
+                    self.deref_mut()[offset..(offset + data.len())].copy_from_slice(data);
+                    Ok(fit)
+                }
+
+                /// `write_abs` is like `write`, but tries to start writing based on the absolute address.
+                /// If the provided address is not included in the region address space, an Error will be returned.
+                fn write_addr(&mut self, addr: u64, buf: &[u8]) -> Result<usize, Error> {
+                    if self.physical_addr.is_none() {
+                        return Err(Error::GuestAddressNotSet);
+                    }
+
+                    let guest = self.physical_addr.unwrap();
+                    if guest.as_u64() < addr {
+                        return Err(Error::InvalidAddress(addr, guest, self.capacity));
+                    }
+
+                    if guest.as_u64() + (self.capacity as u64) < addr {
+                        return Err(Error::InvalidAddress(addr, guest, self.capacity));
+                    }
+
+                    let offset = (addr - guest.as_u64()) as usize;
+                    self.write_offset(offset, buf)
+                }
+            }
+        )*
+    };
+}
+
+impl_ref_mut_traits_for_structs!(WriteOnly, ReadWrite);
+impl_write_for_region!(WriteOnly, ReadWrite);
 
 pub struct Manager<'a> {
     vm: &'a VmFd,
     use_guest_only_fallback: bool,
 }
 
-impl Manager<'_> {
-    pub fn new(vm: &VmFd) -> Self {
+impl<'a> Manager<'a> {
+    pub fn new(vm: &'a VmFd) -> Self {
         Self {
             vm,
             use_guest_only_fallback: !vm.check_extension(Cap::GuestMemfd),
@@ -282,7 +301,7 @@ impl Manager<'_> {
         let mem = unsafe { mmap_anonymous(None, capacity, flags, MMAP_FLAGS) }
             .map_err(|errno| Error::Errno(errno))?;
 
-        let mut region = Region {
+        let region = Region {
             physical_addr: None,
             capacity: capacity.get(),
             storage: StorageBackend::Mmap(mem.cast::<u8>()),
@@ -293,7 +312,10 @@ impl Manager<'_> {
         Ok(region)
     }
 
-    pub fn allocate<P: Perm>(&self, capacity: NonZeroUsize) -> Result<Region<P, DefaultAlign>, Error> {
+    pub fn allocate<P: Perm>(
+        &self,
+        capacity: NonZeroUsize,
+    ) -> Result<Region<P, DefaultAlign>, Error> {
         self.allocate_alignment::<P, DefaultAlign>(capacity)
     }
 

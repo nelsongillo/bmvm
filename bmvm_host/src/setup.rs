@@ -4,11 +4,10 @@ use crate::utils::estimate_page_count;
 use crate::{BMVM_GUEST_SYSTEM, BMVM_GUEST_TMP_SYSTEM_SIZE, BMVM_MIN_TEXT_SEGMENT};
 use bmvm_common::interprete::Interpret;
 use bmvm_common::mem::{
-    Align, DefaultAlign, Flags, LayoutTable, LayoutTableEntry, Page1GiB, Page4KiB, PhysAddr,
-    VirtAddr, align_ceil,
+    Align, DefaultAlign, Flags, LayoutTableEntry, Page1GiB, Page4KiB, VirtAddr, align_ceil,
 };
 use bmvm_common::{BMVM_MEM_LAYOUT_TABLE, BMVM_TMP_GDT, BMVM_TMP_IDT, BMVM_TMP_PAGING};
-use std::num::{NonZero, NonZeroUsize};
+use std::num::NonZeroUsize;
 
 // Values used for system region requirement estimation
 // ------------------------------------------------------------------------------------------------
@@ -36,34 +35,30 @@ const PAGE_FLAG_EXECUTABLE: u64 = 1 << 63;
 /// Setting up a minimal environment containing paging structure, IDT and GDT to be able to enter
 /// long mode and start with the actual structure setup by the guest.
 fn setup_longmode(exec: &ExecBundle, manager: &Manager) -> anyhow::Result<()> {
-    let size = NonZeroUsize::new(size_of::<LayoutTable>()).unwrap();
-    let mut layout_region = manager.allocate::<ReadWrite>(size)?;
-    let layout = LayoutTable::from_mut_bytes(layout_region.as_mut())?;
-
-    layout.entries[0] = estimate_sys_region(&exec.layout)?;
-    let mut idx = 1;
-    for entry in exec.layout.into_iter() {
-        layout.entries[idx] = entry;
-        idx += 1;
-    }
-
-    // allocate and insert the system region containing temporary paging, gdt and idt
+    // allocate a region for the temporary system strutures
     let size_tmp_sys = NonZeroUsize::new(BMVM_GUEST_TMP_SYSTEM_SIZE as usize).unwrap();
     let mut temp_sys_region = manager.allocate::<ReadWrite>(size_tmp_sys)?;
-    // write layout
-    temp_sys_region.write_offset(
-        BMVM_MEM_LAYOUT_TABLE.as_u64() as usize,
-        layout_region.as_ref(),
-    )?;
+
+    // estimate the system region
+    let mut layout = exec.layout.clone();
+    let layout_sys = estimate_sys_region(&layout)?;
+    layout.insert(0, layout_sys);
 
     // write GDT
-    temp_sys_region.write_offset(BMVM_TMP_GDT.as_u64() as usize, gdt().as_ref())?;
+    temp_sys_region.write_offset(BMVM_TMP_GDT.as_usize(), gdt().as_ref())?;
     // write LDT
-    temp_sys_region.write_offset(BMVM_TMP_IDT.as_u64() as usize, idt().as_ref())?;
+    temp_sys_region.write_offset(BMVM_TMP_IDT.as_usize(), idt().as_ref())?;
     // write paging
     for (idx, entry) in paging(&layout).iter() {
         let offset = idx * 8;
         temp_sys_region.write_offset(BMVM_TMP_PAGING.as_u64() as usize + offset, entry)?;
+    }
+
+    // write layout table
+    for (i, entry) in layout.iter().enumerate() {
+        let offset = i * size_of::<LayoutTableEntry>();
+        temp_sys_region
+            .write_offset(BMVM_MEM_LAYOUT_TABLE.as_usize() + offset, &entry.as_array())?;
     }
 
     Ok(())
@@ -72,8 +67,7 @@ fn setup_longmode(exec: &ExecBundle, manager: &Manager) -> anyhow::Result<()> {
 /// Initializes a new Interrupt Descriptor Table (IDT).
 /// Currently, this simply returns an empty vector, as no interrupt handler is registered.
 fn idt() -> Vec<u8> {
-    let mut idt = Vec::new();
-    idt
+    Vec::new()
 }
 
 /// Initialize a new Global Descriptor Table (GDT) valid in Long Mode.
@@ -86,6 +80,7 @@ fn gdt() -> Vec<u8> {
 }
 
 /// Constructs a new GDT entry
+#[inline]
 const fn gdt_entry(base: u64, limit: u64, access_byte: u8, flags: u8) -> [u8; 8] {
     [
         (limit & 0xFF) as u8,
@@ -110,8 +105,8 @@ const fn gdt_entry(base: u64, limit: u64, access_byte: u8, flags: u8) -> [u8; 8]
 /// [PML4][PDPT_1]...[PDPT_N][PD_1]...[PD_N][PT_1]...[PT_N]
 /// The first entry in the PML4 results in an index of 0, the first entry 1, etc.
 /// For PDPT_1 the index is in range [512, 1023], and so on.
-fn paging(layout: &LayoutTable) -> Vec<(usize, [u8; 8])> {
-    let mut output = Vec::new();
+fn paging(layout: &Vec<LayoutTableEntry>) -> Vec<(usize, [u8; 8])> {
+    let mut output: Vec<(usize, [u8; 8])> = Vec::new();
 
     // entries for code and data segments
     // assuming the .text, .data, .rodata, .bss etc sections are all loaded continuously beginning
@@ -122,7 +117,10 @@ fn paging(layout: &LayoutTable) -> Vec<(usize, [u8; 8])> {
     let mut idx = 0;
     while non_sys_pages > 0 {
         let addr = BMVM_MIN_TEXT_SEGMENT + idx * Page1GiB::ALIGNMENT;
-        output.push((512 + idx, paging_entry(addr.as_virt_addr(), true, true)));
+        output.push((
+            (512 + idx) as usize,
+            paging_entry(addr.as_virt_addr(), true, true),
+        ));
         non_sys_pages -= (Page1GiB::ALIGNMENT / Page4KiB::ALIGNMENT) as isize;
         idx += 1;
     }
@@ -137,10 +135,7 @@ fn paging(layout: &LayoutTable) -> Vec<(usize, [u8; 8])> {
         paging_entry(BMVM_GUEST_SYSTEM.as_virt_addr(), true, false),
     ));
 
-    let exec_entry = paging_entry(BMVM_MIN_TEXT_SEGMENT.as_virt_addr(), true, true);
-    let sys_entry = paging_entry(BMVM_GUEST_SYSTEM.as_virt_addr(), true, false);
-
-    Vec::new()
+    output
 }
 
 /// create a new paging entry
@@ -162,13 +157,13 @@ fn paging_entry(addr: VirtAddr, huge: bool, exec: bool) -> [u8; 8] {
 
 /// Based on the provided layout, the size of the system region will be estimated and
 /// the resulting layout entry will be constructed.
-fn estimate_sys_region(base: &LayoutTable) -> anyhow::Result<LayoutTableEntry> {
-    if base.len_present() == 0 {
+fn estimate_sys_region(base: &Vec<LayoutTableEntry>) -> anyhow::Result<LayoutTableEntry> {
+    if base.len() == 0 {
         return Err(anyhow::anyhow!("Empty layout"));
     }
 
     let mut estimate_has_converged = false;
-    let mut layout: Vec<LayoutTableEntry> = base.as_vec_present().clone();
+    let mut layout = base.clone();
 
     // approximate only user space requirements and construct base system requirements
     let (pml4, pdpt, pdt, pt) = estimate_page_count(&layout);
@@ -200,9 +195,9 @@ fn estimate_sys_region(base: &LayoutTable) -> anyhow::Result<LayoutTableEntry> {
 }
 
 /// count all non-system sections and return the total number of required pages.
-fn cound_non_sys_pages(layout: &LayoutTable) -> usize {
+fn cound_non_sys_pages(layout: &Vec<LayoutTableEntry>) -> usize {
     let mut size = 0;
-    layout.into_iter().for_each(|entry| {
+    layout.iter().for_each(|entry| {
         if !entry.flags().contains(Flags::SYSTEM) {
             size += entry.len() as usize
         }
@@ -219,20 +214,19 @@ mod test {
 
     #[test]
     fn estimate_sys_region_single_region() {
-        let base = LayoutTable::from_vec(&vec![LayoutTableEntry::new(
+        let base = vec![LayoutTableEntry::new(
             PhysAddr::new_truncate(0x20_0000),
             0x4_0000, // results in 1 GiB region
             Flags::PRESENT,
-        )])
-        .unwrap();
+        )];
 
-        assert_eq!((1, 1, 2, 0), estimate_page_count(&base.as_vec_present()));
+        assert_eq!((1, 1, 2, 0), estimate_page_count(&base));
         assert_eq!(9, estimate_sys_region(&base).unwrap().len());
     }
 
     #[test]
     fn estimate_sys_region_multiple_regions() {
-        let base = LayoutTable::from_vec(&vec![
+        let base = vec![
             LayoutTableEntry::new(
                 PhysAddr::new_truncate(0x20_0000),
                 0x4_0000, // results in 1 GiB region
@@ -250,16 +244,15 @@ mod test {
                 0x40204, // results in 1GiB + 4MiB + 1 KiB region
                 Flags::PRESENT,
             ),
-        ])
-        .unwrap();
+        ];
 
-        assert_eq!((1, 3, 5, 3), estimate_page_count(&base.as_vec_present()));
+        assert_eq!((1, 3, 5, 3), estimate_page_count(&base));
         assert_eq!(17, estimate_sys_region(&base).unwrap().len());
     }
 
     #[test]
     fn build_paging_structure() {
-        let base = LayoutTable::from_vec(&vec![
+        let base = vec![
             LayoutTableEntry::new(
                 PhysAddr::new_truncate(0x40_0000),
                 0xf, // results in 1 GiB region
@@ -270,10 +263,8 @@ mod test {
                 1, // results in 4 KiB region
                 Flags::PRESENT,
             ),
-        ])
-        .unwrap();
+        ];
 
-        let paging = paging(&base);
-        assert_eq!(4, paging.len());
+        assert_eq!(4, paging(&base).len());
     }
 }

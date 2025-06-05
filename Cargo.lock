@@ -58,6 +58,7 @@ dependencies = [
  "kvm-bindings",
  "kvm-ioctls",
  "nix",
+ "sealed",
 ]
 
 [[package]]

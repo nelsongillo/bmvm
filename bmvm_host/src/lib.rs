@@ -6,7 +6,7 @@ mod runtime;
 mod setup;
 mod utils;
 
-use bmvm_common::mem::{DefaultAlign, PhysAddr, align_ceil};
+use bmvm_common::mem::{PhysAddr, align_ceil};
 #[cfg(feature = "std")]
 pub use bmvm_common::meta;
 #[cfg(feature = "std")]

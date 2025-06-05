@@ -259,6 +259,16 @@ impl LayoutTableEntry {
     pub fn addr(&self) -> PhysAddr {
         PhysAddr::new((self.0 & Self::MASK_RETRIEVE_ADDR) >> 16)
     }
+
+    #[inline]
+    pub const fn as_u64(&self) -> u64 {
+        self.0
+    }
+
+    #[inline]
+    pub const fn as_array(&self) -> [u8; 8] {
+        self.0.to_le_bytes()
+    }
 }
 
 impl Zero for LayoutTableEntry {

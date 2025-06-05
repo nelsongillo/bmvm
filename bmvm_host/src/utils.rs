@@ -1,6 +1,5 @@
 use bmvm_common::mem::{
-    Align, LayoutTable, LayoutTableEntry, Page1GiB, Page2MiB, Page4KiB, PhysAddr, VirtAddr,
-    aligned_and_fits,
+    Align, LayoutTableEntry, Page1GiB, Page2MiB, Page4KiB, VirtAddr, aligned_and_fits,
 };
 use std::collections::HashSet;
 
