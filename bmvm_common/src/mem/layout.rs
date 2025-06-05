@@ -3,8 +3,7 @@ use crate::mem::{Align, DefaultAlign, PhysAddr};
 use bitflags::bitflags;
 use x86_64::structures::paging::PageTableFlags;
 
-#[cfg(feature = "std")]
-use anyhow::anyhow;
+pub const MAX_REGION_SIZE: u64 = u16::MAX as u64 * DefaultAlign::ALIGNMENT;
 
 #[repr(C)]
 pub struct LayoutTable {
@@ -22,12 +21,9 @@ impl LayoutTable {
     }
 
     #[cfg(feature = "std")]
-    pub fn from_vec(vec: &Vec<LayoutTableEntry>) -> anyhow::Result<LayoutTable> {
+    pub fn from_vec(vec: &Vec<LayoutTableEntry>) -> Result<LayoutTable, &'static str> {
         if vec.len() > 512 {
-            return Err(anyhow!(
-                "layout table cannot contain more than 512 entries: got {}",
-                vec.len()
-            ));
+            return Err("layout table cannot contain more than 512 entries");
         }
         let mut l = LayoutTable::new();
         let mut idx = 0;
@@ -135,21 +131,6 @@ impl Flags {
         }
 
         pt_flags
-    }
-}
-
-impl TryFrom<&str> for Flags {
-    type Error = &'static str;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value {
-            ".text" => Ok(Self::CODE),                  // Executable code
-            ".rodata" => Ok(Self::DATA | Self::READ),   // Read-only constants/data
-            ".eh_frame" => Ok(Self::DATA | Self::READ), // Exception handling tables (read-only)
-            ".data" => Ok(Self::WRITE),                 // Initialized writable data
-            ".bss" => Ok(Self::WRITE),                  // Uninitialized data (zero-filled)
-            _ => Err("unknown flag"),
-        }
     }
 }
 

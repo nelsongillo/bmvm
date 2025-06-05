@@ -3,8 +3,7 @@ mod elf;
 mod linker;
 mod module;
 mod runtime;
-mod setup;
-mod utils;
+mod vm;
 
 use bmvm_common::mem::{PhysAddr, align_ceil};
 #[cfg(feature = "std")]

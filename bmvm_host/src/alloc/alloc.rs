@@ -3,7 +3,6 @@ use bmvm_common::mem::{Align, DefaultAlign, PhysAddr};
 use core::ffi::c_void;
 use kvm_bindings::kvm_create_guest_memfd;
 use kvm_ioctls::{Cap, VmFd};
-use nix::errno;
 use nix::sys::mman::{MapFlags, ProtFlags, mmap_anonymous};
 use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut};
@@ -12,41 +11,31 @@ use std::panic;
 use std::ptr::NonNull;
 use std::slice;
 
-const MMAP_FLAGS: MapFlags = MapFlags::MAP_ANONYMOUS;
+const MMAP_FLAGS: [MapFlags; 2] = [MapFlags::MAP_PRIVATE, MapFlags::MAP_ANONYMOUS];
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// Allocation of a new region failed due to the host error.
-    Errno(errno::Errno),
-    /// The provided offset is not included in the region address space.
-    /// Provided Offset, Max Offset
-    InvalidOffset(usize, usize),
+    #[error("kvm errno: {0}")]
+    KvmErrno(#[from] kvm_ioctls::Error),
+
+    #[error("nix errno: {0}")]
+    NixErrno(#[from] nix::errno::Errno),
+
+    #[error("invalid offset: {offset} (max: {max})")]
+    InvalidOffset { offset: usize, max: usize },
+
     /// The provided address is not included in the region address space.
     /// Provided Address, Starting Address, Size
-    InvalidAddress(u64, PhysAddr, usize),
+    #[error("invalid address: {addr:#x} (start: {start:#x}, size: {size})")]
+    InvalidAddress {
+        addr: u64,
+        start: PhysAddr,
+        size: usize,
+    },
+
+    #[error("no guest address set")]
     GuestAddressNotSet,
 }
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Error::GuestAddressNotSet => std::write!(f, "guest address not set"),
-            Error::Errno(errno) => std::write!(f, "errno: {}", errno),
-            Error::InvalidOffset(offset, max) => {
-                std::write!(f, "invalid offset: {} (max: {})", offset, max)
-            }
-            Error::InvalidAddress(addr, start, size) => std::write!(
-                f,
-                "invalid address: {:#x} (start: {:#x}, size: {})",
-                addr,
-                start,
-                size
-            ),
-        }
-    }
-}
-
-impl std::error::Error for Error {}
 
 #[derive(Debug, PartialEq, Eq)]
 enum Storage {}
@@ -148,7 +137,7 @@ macro_rules! impl_read_for_region {
                 /// An offset of 0 indicates the beginning of the page
                 pub fn read_offset(&self, offset: usize, buf: &mut [u8]) -> Result<usize, Error> {
                     if offset > self.capacity {
-                        return Err(Error::InvalidOffset(offset, self.capacity));
+                        return Err(Error::InvalidOffset{ offset: offset, max: self.capacity });
                     }
 
                     // early exit if buffer length is 0
@@ -175,11 +164,11 @@ macro_rules! impl_read_for_region {
 
                     let guest = self.physical_addr.unwrap();
                     if guest.as_u64() < addr {
-                        return Err(Error::InvalidAddress(addr, guest, self.capacity));
+                        return Err(Error::InvalidAddress{ addr: addr, start: guest, size: self.capacity });
                     }
 
                     if guest.as_u64() + (self.capacity as u64) < addr {
-                        return Err(Error::InvalidAddress(addr, guest, self.capacity));
+                        return Err(Error::InvalidAddress{ addr: addr, start: guest, size: self.capacity });
                     }
 
                     let offset = (addr - guest.as_u64()) as usize;
@@ -231,7 +220,7 @@ macro_rules! impl_write_for_region {
                 /// An offset of 0 indicates the beginning of the page.
                 pub fn write_offset(&mut self, offset: usize, buf: &[u8]) -> Result<usize, Error> {
                     if offset > self.capacity {
-                        return Err(Error::InvalidOffset(offset, self.capacity));
+                        return Err(Error::InvalidOffset{ offset: offset, max: self.capacity });
                     }
 
                     // early exit if the buffer is empty
@@ -257,11 +246,19 @@ macro_rules! impl_write_for_region {
 
                     let guest = self.physical_addr.unwrap();
                     if guest.as_u64() < addr {
-                        return Err(Error::InvalidAddress(addr, guest, self.capacity));
+                        return Err(Error::InvalidAddress{
+                            addr: addr,
+                            start: guest,
+                            size: self.capacity
+                        });
                     }
 
                     if guest.as_u64() + (self.capacity as u64) < addr {
-                        return Err(Error::InvalidAddress(addr, guest, self.capacity));
+                        return Err(Error::InvalidAddress{
+                            addr: addr,
+                            start: guest,
+                            size: self.capacity
+                        });
                     }
 
                     let offset = (addr - guest.as_u64()) as usize;
@@ -275,15 +272,15 @@ macro_rules! impl_write_for_region {
 impl_ref_mut_traits_for_structs!(WriteOnly, ReadWrite);
 impl_write_for_region!(WriteOnly, ReadWrite);
 
-pub struct Manager<'a> {
-    vm: &'a VmFd,
+pub struct Manager {
+    m_flags: MapFlags,
     use_guest_only_fallback: bool,
 }
 
-impl<'a> Manager<'a> {
-    pub fn new(vm: &'a VmFd) -> Self {
+impl Manager {
+    pub fn new(vm: &VmFd) -> Self {
         Self {
-            vm,
+            m_flags: MMAP_FLAGS.iter().fold(MapFlags::empty(), |acc, x| acc | *x),
             use_guest_only_fallback: !vm.check_extension(Cap::GuestMemfd),
         }
     }
@@ -291,15 +288,15 @@ impl<'a> Manager<'a> {
     pub fn allocate_alignment<P: Perm, A: Align>(
         &self,
         capacity: NonZeroUsize,
+        vm: &VmFd,
     ) -> Result<Region<P, A>, Error> {
         let flags = P::prot_flags();
         if flags.contains(ProtFlags::PROT_NONE) {
-            return self.alloc_guest_memfd(capacity);
+            return self.alloc_guest_memfd(capacity, vm);
         }
 
         // mmap a region with the required size and flags
-        let mem = unsafe { mmap_anonymous(None, capacity, flags, MMAP_FLAGS) }
-            .map_err(|errno| Error::Errno(errno))?;
+        let mem = unsafe { mmap_anonymous(None, capacity, flags, self.m_flags) }?;
 
         let region = Region {
             physical_addr: None,
@@ -315,8 +312,9 @@ impl<'a> Manager<'a> {
     pub fn allocate<P: Perm>(
         &self,
         capacity: NonZeroUsize,
+        vm: &VmFd,
     ) -> Result<Region<P, DefaultAlign>, Error> {
-        self.allocate_alignment::<P, DefaultAlign>(capacity)
+        self.allocate_alignment::<P, DefaultAlign>(capacity, vm)
     }
 
     fn perm_to_flags<P: Perm>(&self) -> ProtFlags {
@@ -332,6 +330,7 @@ impl<'a> Manager<'a> {
     fn alloc_guest_memfd<P: Perm, A: Align>(
         &self,
         capacity: NonZeroUsize,
+        vm: &VmFd,
     ) -> Result<Region<P, A>, Error> {
         let gmem = kvm_create_guest_memfd {
             size: capacity.get() as u64,
@@ -339,10 +338,7 @@ impl<'a> Manager<'a> {
             reserved: [0; 6],
         };
 
-        let fd = self
-            .vm
-            .create_guest_memfd(gmem)
-            .map_err(|_| Error::Errno(errno::Errno::EIO))?;
+        let fd = vm.create_guest_memfd(gmem)?;
 
         unimplemented!()
     }

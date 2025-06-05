@@ -1,12 +1,12 @@
 use crate::alloc::{Manager, ReadWrite};
 use crate::elf::ExecBundle;
-use crate::utils::estimate_page_count;
+use crate::vm::utils::estimate_page_count;
 use crate::{BMVM_GUEST_SYSTEM, BMVM_GUEST_TMP_SYSTEM_SIZE, BMVM_MIN_TEXT_SEGMENT};
-use bmvm_common::interprete::Interpret;
 use bmvm_common::mem::{
     Align, DefaultAlign, Flags, LayoutTableEntry, Page1GiB, Page4KiB, VirtAddr, align_ceil,
 };
 use bmvm_common::{BMVM_MEM_LAYOUT_TABLE, BMVM_TMP_GDT, BMVM_TMP_IDT, BMVM_TMP_PAGING};
+use kvm_ioctls::VmFd;
 use std::num::NonZeroUsize;
 
 // Values used for system region requirement estimation
@@ -34,10 +34,10 @@ const PAGE_FLAG_EXECUTABLE: u64 = 1 << 63;
 
 /// Setting up a minimal environment containing paging structure, IDT and GDT to be able to enter
 /// long mode and start with the actual structure setup by the guest.
-fn setup_longmode(exec: &ExecBundle, manager: &Manager) -> anyhow::Result<()> {
+fn setup_longmode(exec: &ExecBundle, manager: &Manager, vm: &VmFd) -> anyhow::Result<()> {
     // allocate a region for the temporary system strutures
     let size_tmp_sys = NonZeroUsize::new(BMVM_GUEST_TMP_SYSTEM_SIZE as usize).unwrap();
-    let mut temp_sys_region = manager.allocate::<ReadWrite>(size_tmp_sys)?;
+    let mut temp_sys_region = manager.allocate::<ReadWrite>(size_tmp_sys, vm)?;
 
     // estimate the system region
     let mut layout = exec.layout.clone();

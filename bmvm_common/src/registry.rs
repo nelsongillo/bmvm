@@ -1,4 +1,3 @@
-use alloc::vec::Vec;
 use core::convert::TryFrom;
 use core::result::Result;
 use sealed::sealed;

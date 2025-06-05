@@ -1,6 +1,6 @@
 use core::fmt::{Debug, Display};
 #[cfg(feature = "std")]
-use std::fmt::{Formatter, Write};
+use std::fmt::{Formatter};
 
 pub trait Zero {
     /// zero sets all values to their respective 0 value
