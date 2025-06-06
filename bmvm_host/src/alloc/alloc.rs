@@ -5,7 +5,6 @@ use kvm_bindings::kvm_create_guest_memfd;
 use kvm_ioctls::{Cap, VmFd};
 use nix::sys::mman::{MapFlags, ProtFlags, mmap_anonymous};
 use std::num::NonZeroUsize;
-use std::ops::{Deref, DerefMut};
 use std::os::fd::RawFd;
 use std::panic;
 use std::ptr::NonNull;
@@ -97,32 +96,23 @@ impl<P: Perm, A: Align> Drop for Region<P, A> {
 
 impl Region<GuestOnly> {}
 
-macro_rules! impl_ref_traits_for_region {
+macro_rules! impl_as_ref_for_region {
     ($($struct:ty),* $(,)?) => {
         $(
-            impl<A: Align> Deref for Region<$struct, A> {
-                type Target = [u8];
-
-                #[inline]
-                fn deref(&self) -> &[u8] {
-                    match self.storage {
-                        StorageBackend::GuestMem(_) => {
-                            panic!("deref on guest memory");
-                        },
-                        StorageBackend::Mmap(ptr) if ptr.as_ptr().is_null() => {
-                            panic!("deref on null pointer");
-                        }
-                        StorageBackend::Mmap(ptr) => {
-                            unsafe { slice::from_raw_parts(ptr.as_ptr(), self.capacity) }
-                        }
-                    }
-                }
-            }
-
             impl<A: Align> AsRef<[u8]> for Region<$struct, A> {
                 #[inline]
                 fn as_ref(&self) -> &[u8] {
-                    self.deref()
+                    match self.storage {
+                        StorageBackend::GuestMem(_) => {
+                            panic!("deref_mut on guest memory");
+                        },
+                        StorageBackend::Mmap(ptr) if ptr.as_ptr().is_null() => {
+                            panic!("deref_mut on null pointer");
+                        }
+                        StorageBackend::Mmap(mut ptr) => {
+                            unsafe { slice::from_raw_parts(ptr.as_ptr(), self.capacity) }
+                        }
+                    }
                 }
             }
         )*
@@ -179,15 +169,15 @@ macro_rules! impl_read_for_region {
     };
 }
 
-impl_ref_traits_for_region!(ReadOnly, WriteOnly, ReadWrite);
+impl_as_ref_for_region!(ReadOnly, WriteOnly, ReadWrite);
 impl_read_for_region!(ReadOnly, ReadWrite);
 
-macro_rules! impl_ref_mut_traits_for_structs {
+macro_rules! impl_as_mut_for_region {
     ($($struct:ty),* $(,)?) => {
         $(
-            impl<A: Align> DerefMut for Region<$struct, A> {
+            impl<A: Align> AsMut<[u8]> for Region<$struct, A> {
                 #[inline]
-                fn deref_mut(&mut self) -> &mut [u8] {
+                fn as_mut(&mut self) -> &mut [u8] {
                     match self.storage {
                         StorageBackend::GuestMem(_) => {
                             panic!("deref_mut on guest memory");
@@ -199,13 +189,6 @@ macro_rules! impl_ref_mut_traits_for_structs {
                             unsafe { slice::from_raw_parts_mut(ptr.as_mut(), self.capacity) }
                         }
                     }
-                }
-            }
-
-            impl<A: Align> AsMut<[u8]> for Region<$struct, A> {
-                #[inline]
-                fn as_mut(&mut self) -> &mut [u8] {
-                    self.deref_mut()
                 }
             }
         )*
@@ -233,7 +216,7 @@ macro_rules! impl_write_for_region {
                     let data = &buf[..fit];
 
                     // Copy data into the memory-mapped region
-                    self.deref_mut()[offset..(offset + data.len())].copy_from_slice(data);
+                    self.as_mut()[offset..(offset + data.len())].copy_from_slice(data);
                     Ok(fit)
                 }
 
@@ -269,7 +252,7 @@ macro_rules! impl_write_for_region {
     };
 }
 
-impl_ref_mut_traits_for_structs!(WriteOnly, ReadWrite);
+impl_as_mut_for_region!(WriteOnly, ReadWrite);
 impl_write_for_region!(WriteOnly, ReadWrite);
 
 pub struct Manager {
