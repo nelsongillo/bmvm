@@ -7,8 +7,7 @@ use bmvm_common::mem::{
 use goblin::elf;
 use goblin::elf::{Elf, Header, ProgramHeader};
 use goblin::elf32::header::machine_to_str;
-use kvm_ioctls::VmFd;
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 use std::fs;
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -45,6 +44,9 @@ pub enum Error {
     #[error("unsupported section {0}")]
     ElfUnsupportedSection(String),
 
+    #[error("Invalid entry point: {0}")]
+    InvalidEntryPoint(u64),
+
     #[error("Unable to parse ELF: {0}")]
     ElfParse(#[from] goblin::error::Error),
 
@@ -55,11 +57,32 @@ pub enum Error {
     IO(#[from] std::io::Error),
 }
 
+pub struct Buffer {
+    inner: Vec<u8>,
+}
+
+impl Buffer {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
+        // early exit if minimal requirements are not met
+        check_minimal_file_requirements(&path)?;
+        let buf = fs::read(&path)?;
+
+        // early exit if the platform is not supported
+        check_platform_supported(&buf)?;
+
+        Ok(Self { inner: buf })
+    }
+}
+
+impl AsRef<[u8]> for Buffer {
+    fn as_ref(&self) -> &[u8] {
+        &self.inner
+    }
+}
+
 pub struct ExecBundle {
-    initialized: bool,
-    buf: Vec<u8>,
+    pub(crate) entry: PhysAddr,
     pub(crate) mem_regions: Vec<Region<ReadWrite>>,
-    pub(crate) entry_point: u64,
     pub(crate) layout: Vec<LayoutTableEntry>,
     // pub calls: Vec<CallMeta>,
 }
@@ -76,25 +99,13 @@ fn section_name_to_flags(name: &str) -> Result<Flags> {
 }
 
 impl ExecBundle {
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
-        // early exit if minimal requirements are not met
-        check_minimal_file_requirements(&path)?;
-        let elf_buf = fs::read(&path)?;
+    pub(crate) fn from_buffer(buf: Buffer, manager: &Manager) -> Result<Self> {
+        let elf = Elf::parse(buf.as_ref())?;
 
-        // early exit if the platform is not supported
-        check_platform_supported(&elf_buf)?;
-
-        Ok(Self {
-            initialized: false,
-            buf: elf_buf,
-            mem_regions: Vec::new(),
-            entry_point: u64::MIN,
-            layout: Vec::new(),
-        })
-    }
-
-    pub(crate) fn parse(&mut self, manager: &Manager, vm: &VmFd) -> Result<()> {
-        let elf = Elf::parse(self.buf.as_slice())?;
+        let entry =
+            PhysAddr::try_from(elf.entry).map_err(|_| Error::InvalidEntryPoint(elf.entry))?;
+        let mut layout = Vec::new();
+        let mut mem_regions = Vec::new();
 
         // | code | data | heap | ...
         // iterate through all PH_LOAD header and build buffer
@@ -110,21 +121,24 @@ impl ExecBundle {
             let to_alloc = p_end - p_start;
 
             // try creating a layout entry for this segment
-            self.layout
-                .push(Self::build_layout_table_entry(idx, ph, to_alloc, &elf)?);
+            layout.push(Self::build_layout_table_entry(idx, ph, to_alloc, &elf)?);
 
             // allocate + copy file content to region
             let req_capacity = NonZeroUsize::new(to_alloc as usize).unwrap();
-            let mut mem = manager.allocate::<ReadWrite>(req_capacity, vm)?;
+            let mut mem = manager.alloc_accessible::<ReadWrite>(req_capacity)?;
             let to_cpy =
-                &self.buf[ph.p_offset as usize..(ph.p_offset as usize + ph.p_filesz as usize)];
+                &buf.as_ref()[ph.p_offset as usize..(ph.p_offset as usize + ph.p_filesz as usize)];
             let region_offset = ph.p_vaddr - p_start;
             mem.write_offset(region_offset as usize, to_cpy)?;
             mem.set_guest_addr(PhysAddr::new(p_start));
-            self.mem_regions.push(mem);
+            mem_regions.push(mem);
         }
 
-        Ok(())
+        Ok(Self {
+            entry,
+            mem_regions,
+            layout,
+        })
     }
 
     /*

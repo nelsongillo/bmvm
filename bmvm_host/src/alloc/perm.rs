@@ -1,6 +1,5 @@
 #![allow(unused)]
 
-use nix::libc::PROT_READ;
 use nix::sys::mman::ProtFlags;
 use sealed::sealed;
 
@@ -9,6 +8,9 @@ use sealed::sealed;
 pub trait Perm {
     fn prot_flags() -> ProtFlags;
 }
+
+#[sealed]
+pub trait Accessible {}
 
 /// ReadOnly implements the Readable trait. This should be used as the generic.
 pub struct ReadOnly;
@@ -21,6 +23,9 @@ impl Perm for ReadOnly {
     }
 }
 
+#[sealed]
+impl Accessible for ReadOnly {}
+
 /// WriteOnly implements the Writeable trait. This should be used as the generic.
 pub struct WriteOnly;
 
@@ -32,6 +37,9 @@ impl Perm for WriteOnly {
     }
 }
 
+#[sealed]
+impl Accessible for WriteOnly {}
+
 /// ReadWrite implements the Writeable, as well as the Readable trait. This should be used as the generic.
 pub struct ReadWrite;
 
@@ -42,6 +50,9 @@ impl Perm for ReadWrite {
         ProtFlags::PROT_WRITE | ProtFlags::PROT_READ
     }
 }
+
+#[sealed]
+impl Accessible for ReadWrite {}
 
 /// GuestOnly implements Anon trait, indication neither a read nor a write permission is granted.
 /// We try to create a guest-only region via the `KVM_CREATE_GUEST_MEMFD` ioctl. If the capability

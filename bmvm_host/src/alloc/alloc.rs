@@ -1,4 +1,4 @@
-use crate::alloc::{GuestOnly, Perm, ReadOnly, ReadWrite, WriteOnly};
+use crate::alloc::{Accessible, GuestOnly, Perm, ReadOnly, ReadWrite, WriteOnly};
 use bmvm_common::mem::{Align, DefaultAlign, PhysAddr};
 use core::ffi::c_void;
 use kvm_bindings::kvm_create_guest_memfd;
@@ -100,7 +100,6 @@ macro_rules! impl_as_ref_for_region {
     ($($struct:ty),* $(,)?) => {
         $(
             impl<A: Align> AsRef<[u8]> for Region<$struct, A> {
-                #[inline]
                 fn as_ref(&self) -> &[u8] {
                     match self.storage {
                         StorageBackend::GuestMem(_) => {
@@ -176,7 +175,6 @@ macro_rules! impl_as_mut_for_region {
     ($($struct:ty),* $(,)?) => {
         $(
             impl<A: Align> AsMut<[u8]> for Region<$struct, A> {
-                #[inline]
                 fn as_mut(&mut self) -> &mut [u8] {
                     match self.storage {
                         StorageBackend::GuestMem(_) => {
@@ -268,16 +266,63 @@ impl Manager {
         }
     }
 
-    pub fn allocate_alignment<P: Perm, A: Align>(
+    #[inline]
+    pub fn alloc<P: Perm>(
+        &self,
+        capacity: NonZeroUsize,
+        vm: &VmFd,
+    ) -> Result<Region<P, DefaultAlign>, Error> {
+        self.alloc_aligned::<P, DefaultAlign>(capacity, vm)
+    }
+
+    #[inline]
+    pub fn alloc_aligned<P: Perm, A: Align>(
+        &self,
+        capacity: NonZeroUsize,
+        vm: &VmFd,
+    ) -> Result<Region<P, A>, Error> {
+        self.allocate::<P, A>(capacity, vm)
+    }
+
+    #[inline]
+    pub fn alloc_accessible<P>(&self, capacity: NonZeroUsize) -> Result<Region<P>, Error>
+    where
+        P: Perm + Accessible,
+    {
+        self.alloc_aligned_accessible::<P, DefaultAlign>(capacity)
+    }
+
+    #[inline]
+    pub fn alloc_aligned_accessible<P, A>(
+        &self,
+        capacity: NonZeroUsize,
+    ) -> Result<Region<P, A>, Error>
+    where
+        A: Align,
+        P: Perm + Accessible,
+    {
+        self.mmap::<P, A>(capacity)
+    }
+
+    fn allocate<P: Perm, A: Align>(
         &self,
         capacity: NonZeroUsize,
         vm: &VmFd,
     ) -> Result<Region<P, A>, Error> {
         let flags = P::prot_flags();
         if flags.contains(ProtFlags::PROT_NONE) {
-            return self.alloc_guest_memfd(capacity, vm);
+            self.guest_memfd(capacity, vm)
+        } else {
+            self.mmap(capacity)
         }
+    }
 
+    fn mmap<P, A>(&self, capacity: NonZeroUsize) -> Result<Region<P, A>, Error>
+    where
+        A: Align,
+        P: Perm,
+    {
+        let flags = P::prot_flags();
         // mmap a region with the required size and flags
         let mem = unsafe { mmap_anonymous(None, capacity, flags, self.m_flags) }?;
 
@@ -292,25 +337,8 @@ impl Manager {
         Ok(region)
     }
 
-    pub fn allocate<P: Perm>(
-        &self,
-        capacity: NonZeroUsize,
-        vm: &VmFd,
-    ) -> Result<Region<P, DefaultAlign>, Error> {
-        self.allocate_alignment::<P, DefaultAlign>(capacity, vm)
-    }
-
-    fn perm_to_flags<P: Perm>(&self) -> ProtFlags {
-        let flags = P::prot_flags();
-        if self.use_guest_only_fallback && flags.contains(ProtFlags::PROT_NONE) {
-            return ProtFlags::PROT_READ | ProtFlags::PROT_WRITE;
-        }
-
-        flags
-    }
-
     // TODO: implement me
-    fn alloc_guest_memfd<P: Perm, A: Align>(
+    fn guest_memfd<P: Perm, A: Align>(
         &self,
         capacity: NonZeroUsize,
         vm: &VmFd,
@@ -324,5 +352,16 @@ impl Manager {
         let fd = vm.create_guest_memfd(gmem)?;
 
         unimplemented!()
+    }
+
+    /// wrap the P::prot_flags to include the guest only fallback flag
+    /// if the Perm is not accessible
+    fn perm_to_flags<P: Perm>(&self) -> ProtFlags {
+        let flags = P::prot_flags();
+        if self.use_guest_only_fallback && flags.contains(ProtFlags::PROT_NONE) {
+            return ProtFlags::PROT_READ | ProtFlags::PROT_WRITE;
+        }
+
+        flags
     }
 }

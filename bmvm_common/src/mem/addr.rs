@@ -29,6 +29,12 @@ impl PhysAddr {
         Self(addr)
     }
 
+    /// Creates a new physical address without asserting the validity. Use when you `know`
+    /// the address is correctly formatted.
+    pub const fn new_unchecked(addr: u64) -> Self {
+        Self(addr)
+    }
+
     /// Creates a new physical address, throwing out bits 49..64.
     #[inline]
     pub const fn new_truncate(addr: u64) -> Self {
@@ -131,5 +137,18 @@ impl Sub<PhysAddr> for PhysAddr {
     #[inline]
     fn sub(self, rhs: PhysAddr) -> Self::Output {
         self.as_u64().checked_sub(rhs.as_u64()).unwrap()
+    }
+}
+
+impl TryFrom<u64> for PhysAddr {
+    type Error = &'static str;
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        let addr = PhysAddr::new_truncate(value);
+        if addr.as_u64() == value {
+            Ok(addr)
+        } else {
+            Err("Invalid physical address")
+        }
     }
 }
