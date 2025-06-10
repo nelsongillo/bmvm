@@ -7,4 +7,7 @@ edition = "2024"
 bmvm-host = {path = "../../bmvm_host" }
 bmvm-common = {path = "../../bmvm_common",features = ["std"]}
 serde = { version = "1.0.219", features = ["derive"] }
+anyhow = "1.0.98"
+env_logger = "0.11.8"
+log = "0.4.27"
 

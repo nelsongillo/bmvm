@@ -4,10 +4,12 @@ use core::ffi::c_void;
 use kvm_bindings::kvm_create_guest_memfd;
 use kvm_ioctls::{Cap, VmFd};
 use nix::sys::mman::{MapFlags, ProtFlags, mmap_anonymous};
+use std::cmp::min;
 use std::num::NonZeroUsize;
 use std::os::fd::RawFd;
 use std::panic;
 use std::ptr::NonNull;
+use std::rc::Rc;
 use std::slice;
 
 const MMAP_FLAGS: [MapFlags; 2] = [MapFlags::MAP_PRIVATE, MapFlags::MAP_ANONYMOUS];
@@ -34,6 +36,38 @@ pub enum Error {
 
     #[error("no guest address set")]
     GuestAddressNotSet,
+}
+
+pub struct RegionCollection {
+    regions: Vec<RegionEntry>,
+}
+
+pub enum RegionEntry {
+    ReadOnly(Rc<Region<ReadOnly>>),
+    WriteOnly(Rc<Region<WriteOnly>>),
+    ReadWrite(Rc<Region<ReadWrite>>),
+    GuestOnly(Rc<Region<GuestOnly>>),
+}
+
+impl RegionCollection {
+    pub fn new() -> Self {
+        Self {
+            regions: Vec::new(),
+        }
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            regions: Vec::with_capacity(capacity),
+        }
+    }
+
+    pub fn add<R>(&mut self, entry: R)
+    where
+        R: Into<RegionEntry>,
+    {
+        self.regions.push(entry.into());
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -78,6 +112,18 @@ impl<P: Perm, A: Align> Region<P, A> {
     pub fn capacity(&self) -> usize {
         self.capacity
     }
+
+    pub fn as_ptr(&self) -> *const u8 {
+        match self.storage {
+            StorageBackend::GuestMem(_) => {
+                panic!("tried to get ptr from guest memory");
+            }
+            StorageBackend::Mmap(ptr) if ptr.as_ptr().is_null() => {
+                panic!("tried to get region pointer but is null");
+            }
+            StorageBackend::Mmap(ptr) => ptr.as_ptr(),
+        }
+    }
 }
 
 impl<P: Perm, A: Align> Drop for Region<P, A> {
@@ -96,6 +142,32 @@ impl<P: Perm, A: Align> Drop for Region<P, A> {
 
 impl Region<GuestOnly> {}
 
+/*
+impl Into<RegionEntry> for Rc<Region<ReadOnly>> {
+    fn into(self) -> RegionEntry {
+        RegionEntry::ReadOnly(self)
+    }
+}
+
+impl Into<RegionEntry> for Region<WriteOnly> {
+    fn into(self) -> RegionEntry {
+        RegionEntry::WriteOnly(self)
+    }
+}
+
+impl Into<RegionEntry> for Region<ReadWrite> {
+    fn into(self) -> RegionEntry {
+        RegionEntry::ReadWrite(self)
+    }
+}
+
+impl Into<RegionEntry> for Region<GuestOnly> {
+    fn into(self) -> RegionEntry {
+        RegionEntry::GuestOnly(self)
+    }
+}
+
+*/
 macro_rules! impl_as_ref_for_region {
     ($($struct:ty),* $(,)?) => {
         $(
@@ -108,7 +180,7 @@ macro_rules! impl_as_ref_for_region {
                         StorageBackend::Mmap(ptr) if ptr.as_ptr().is_null() => {
                             panic!("deref_mut on null pointer");
                         }
-                        StorageBackend::Mmap(mut ptr) => {
+                        StorageBackend::Mmap(ptr) => {
                             unsafe { slice::from_raw_parts(ptr.as_ptr(), self.capacity) }
                         }
                     }
@@ -135,11 +207,7 @@ macro_rules! impl_read_for_region {
                     }
 
                     // Copy data into the memory-mapped region
-                    let to_copy = if buf.len() > self.capacity - offset {
-                        self.capacity - offset
-                    } else {
-                        buf.len()
-                    };
+                    let to_copy = min(self.capacity - offset, buf.len());
                     buf.copy_from_slice(&self.as_ref()[offset..(offset + to_copy)]);
                     Ok(to_copy)
                 }
@@ -210,7 +278,7 @@ macro_rules! impl_write_for_region {
                     }
 
                     // Calculate the amount of data that can be written
-                    let fit = self.capacity - offset;
+                    let fit = min(self.capacity - offset, buf.len());
                     let data = &buf[..fit];
 
                     // Copy data into the memory-mapped region
@@ -253,73 +321,50 @@ macro_rules! impl_write_for_region {
 impl_as_mut_for_region!(WriteOnly, ReadWrite);
 impl_write_for_region!(WriteOnly, ReadWrite);
 
-pub struct Manager {
+pub struct Allocator {
     m_flags: MapFlags,
     use_guest_only_fallback: bool,
+    regions: RegionCollection,
 }
 
-impl Manager {
+impl Allocator {
     pub fn new(vm: &VmFd) -> Self {
         Self {
             m_flags: MMAP_FLAGS.iter().fold(MapFlags::empty(), |acc, x| acc | *x),
             use_guest_only_fallback: !vm.check_extension(Cap::GuestMemfd),
+            regions: RegionCollection::new(),
         }
     }
 
-    #[inline]
     pub fn alloc<P: Perm>(
         &self,
         capacity: NonZeroUsize,
         vm: &VmFd,
     ) -> Result<Region<P, DefaultAlign>, Error> {
-        self.alloc_aligned::<P, DefaultAlign>(capacity, vm)
+        self.allocate::<P>(capacity, vm)
     }
 
-    #[inline]
-    pub fn alloc_aligned<P: Perm, A: Align>(
-        &self,
-        capacity: NonZeroUsize,
-        vm: &VmFd,
-    ) -> Result<Region<P, A>, Error> {
-        self.allocate::<P, A>(capacity, vm)
-    }
-
-    #[inline]
     pub fn alloc_accessible<P>(&self, capacity: NonZeroUsize) -> Result<Region<P>, Error>
     where
         P: Perm + Accessible,
     {
-        self.alloc_aligned_accessible::<P, DefaultAlign>(capacity)
+        self.mmap::<P>(capacity)
     }
 
-    #[inline]
-    pub fn alloc_aligned_accessible<P, A>(
-        &self,
-        capacity: NonZeroUsize,
-    ) -> Result<Region<P, A>, Error>
-    where
-        A: Align,
-        P: Perm + Accessible,
-    {
-        self.mmap::<P, A>(capacity)
-    }
+    fn allocate<P: Perm>(&self, capacity: NonZeroUsize, vm: &VmFd) -> Result<Region<P>, Error> {
+        let aligned_cap = DefaultAlign::align_ceil(capacity.get() as u64);
+        let cap = NonZeroUsize::new(aligned_cap as usize).unwrap();
 
-    fn allocate<P: Perm, A: Align>(
-        &self,
-        capacity: NonZeroUsize,
-        vm: &VmFd,
-    ) -> Result<Region<P, A>, Error> {
         let flags = P::prot_flags();
         if flags.contains(ProtFlags::PROT_NONE) {
-            self.guest_memfd(capacity, vm)
+            self.guest_memfd(cap, vm)
         } else {
-            self.mmap(capacity)
+            self.mmap(cap)
         }
     }
 
-    fn mmap<P, A>(&self, capacity: NonZeroUsize) -> Result<Region<P, A>, Error>
+    fn mmap<P>(&self, capacity: NonZeroUsize) -> Result<Region<P>, Error>
     where
-        A: Align,
         P: Perm,
     {
         let flags = P::prot_flags();
@@ -334,15 +379,13 @@ impl Manager {
             _align: std::marker::PhantomData,
         };
 
+        // self.regions.add(region);
+
         Ok(region)
     }
 
     // TODO: implement me
-    fn guest_memfd<P: Perm, A: Align>(
-        &self,
-        capacity: NonZeroUsize,
-        vm: &VmFd,
-    ) -> Result<Region<P, A>, Error> {
+    fn guest_memfd<P: Perm>(&self, capacity: NonZeroUsize, vm: &VmFd) -> Result<Region<P>, Error> {
         let gmem = kvm_create_guest_memfd {
             size: capacity.get() as u64,
             flags: 0,

@@ -17,12 +17,16 @@ pub mod registry;
 /// The ELF section name for the metadata containing the call guest provided function information.
 pub const BMVM_META_SECTION: &str = ".bmvm.call.host";
 
+/// The address where the temporary system region should be mapped into the guest
+pub const BMVM_TMP_SYS: PhysAddr = PhysAddr::new(0x0000);
+
 /// The memory layout table will be places at this address for the guest to access.
 pub const BMVM_MEM_LAYOUT_TABLE: PhysAddr = PhysAddr::new(0x0000);
 
 /// The temporary global descriptor table (GDT) used for setting up long mode will be placed at this
 /// address. The guest can either modify this table or create another one and switch later.
 pub const BMVM_TMP_GDT: PhysAddr = PhysAddr::new(0x1000);
+pub const BMVM_TMP_GDT_LIMIT: usize = 0x1000;
 
 /// The temporary interrupt descriptor table (IDT) used for setting up long mode will be placed at
 /// this address. The guest can either modify this table or create another one and switch later.

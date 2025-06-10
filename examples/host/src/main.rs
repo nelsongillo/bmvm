@@ -1,21 +1,20 @@
 use bmvm_common::registry::Serializable;
-use bmvm_host::expose;
+use bmvm_host::{Config, Runtime, expose};
+use std::env::args;
 
-#[derive(Debug, Clone, Copy, serde::Deserialize, serde::Serialize)]
-struct Foo {
-    a: u32,
+// TODO: Why trigger KVM_EXIT_SHUTDOWN on entry?! probably
+fn main() -> anyhow::Result<()> {
+    env_logger::init();
+
+    let args = args().collect::<Vec<String>>();
+    if args.len() < 2 {
+        log::error!("Usage: {} <executable>", args[0]);
+        return Ok(());
+    }
+
+    let mut runtime = Runtime::new(Config::default(), args[1].clone())?;
+    match runtime.run() {
+        Ok(_) => Ok(()),
+        Err(e) => Err(anyhow::anyhow!("{:?}", e)),
+    }
 }
-
-impl<'de> Serializable<'de> for Foo {}
-
-#[expose]
-fn sample(a: u32, foo: Foo) {
-    println!("{0:?}, {1:?}\n", a, foo);
-}
-
-#[expose]
-fn fooo(a: u32) {
-    println!("{0:?}", a);
-}
-
-fn main() {}

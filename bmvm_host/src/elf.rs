@@ -89,17 +89,17 @@ pub struct ExecBundle {
 
 fn section_name_to_flags(name: &str) -> Result<Flags> {
     match name {
-        ".text" => Ok(Flags::CODE),                   // Executable code
-        ".rodata" => Ok(Flags::DATA | Flags::READ),   // Read-only constants/data
-        ".eh_frame" => Ok(Flags::DATA | Flags::READ), // Exception handling tables (read-only)
-        ".data" => Ok(Flags::WRITE),                  // Initialized writable data
-        ".bss" => Ok(Flags::WRITE),                   // Uninitialized data (zero-filled)
+        _ if name.starts_with(".text") => Ok(Flags::CODE), // Executable code
+        _ if name.starts_with(".rodata") => Ok(Flags::DATA | Flags::READ), // Read-only constants/data
+        _ if name.starts_with(".eh_frame") => Ok(Flags::DATA | Flags::READ), // Exception handling tables (read-only)
+        _ if name.starts_with(".data") => Ok(Flags::WRITE), // Initialized writable data
+        _ if name.starts_with(".bss") => Ok(Flags::WRITE),  // Uninitialized data (zero-filled)
         _ => Err(Error::ElfUnsupportedSection(name.to_string())),
     }
 }
 
 impl ExecBundle {
-    pub(crate) fn from_buffer(buf: Buffer, manager: &Manager) -> Result<Self> {
+    pub(crate) fn from_buffer(buf: Buffer, manager: &Allocator) -> Result<Self> {
         let elf = Elf::parse(buf.as_ref())?;
 
         let entry =
@@ -177,8 +177,8 @@ impl ExecBundle {
         allocated_size: u64,
         elf: &Elf,
     ) -> Result<LayoutTableEntry> {
-        let p_start = ph.p_vaddr;
-        let p_end = ph.p_vaddr + ph.p_memsz;
+        let p_start = align_floor(ph.p_vaddr);
+        let p_end = align_ceil(ph.p_vaddr + ph.p_memsz);
 
         // get segment -> section association and create entry in layout table
         for (i, sh) in elf.section_headers.iter().enumerate() {

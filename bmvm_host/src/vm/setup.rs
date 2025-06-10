@@ -10,8 +10,8 @@ use std::collections::HashSet;
 // ------------------------------------------------------------------------------------------------
 const PAGE_TABLE_SIZE: u64 = 0x1000;
 const NUM_SYS_BUFFER_PAGES: u64 = 4;
-const IDT_SIZE: u64 = 0x1000;
-const GDT_SIZE: u64 = 0x1000;
+pub(super) const IDT_SIZE: u64 = 0x1000;
+pub(super) const GDT_SIZE: u64 = 0x1000;
 const IDT_PAGE_REQUIRED: usize = (align_ceil(IDT_SIZE) / DefaultAlign::ALIGNMENT) as usize;
 const GDT_PAGE_REQUIRED: usize = (align_ceil(GDT_SIZE) / DefaultAlign::ALIGNMENT) as usize;
 
@@ -28,6 +28,14 @@ const PAGE_FLAG_WRITE: u64 = 1 << 1;
 const PAGE_FLAG_USER: u64 = 1 << 2;
 const PAGE_FLAG_HUGE: u64 = 1 << 7;
 const PAGE_FLAG_EXECUTABLE: u64 = 1 << 63;
+
+type Result<T> = core::result::Result<T, Error>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Empty Module")]
+    EmptyModule,
+}
 
 /// Initializes a new Interrupt Descriptor Table (IDT).
 /// Currently, this simply returns an empty vector, as no interrupt handler is registered.
@@ -90,11 +98,9 @@ pub(crate) fn paging(layout: &Vec<LayoutTableEntry>) -> Vec<(usize, [u8; 8])> {
 
 /// Based on the provided layout, the size of the system region will be estimated and
 /// the resulting layout entry will be constructed.
-pub(crate) fn estimate_sys_region(
-    base: &Vec<LayoutTableEntry>,
-) -> anyhow::Result<LayoutTableEntry> {
+pub(super) fn estimate_sys_region(base: &Vec<LayoutTableEntry>) -> Result<LayoutTableEntry> {
     if base.len() == 0 {
-        return Err(anyhow::anyhow!("Empty layout"));
+        return Err(Error::EmptyModule);
     }
 
     let mut estimate_has_converged = false;

@@ -1,8 +1,9 @@
 use crate::utils::Dirty;
-use bitflags::bitflags;
+use crate::vm::setup::{GDT_SIZE, IDT_SIZE};
+use bmvm_common::mem::VirtAddr;
 use kvm_bindings::{
-    KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_SINGLESTEP, kvm_guest_debug, kvm_guest_debug_arch, kvm_regs,
-    kvm_sregs,
+    __u16, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_SINGLESTEP, kvm_dtable, kvm_guest_debug,
+    kvm_guest_debug_arch, kvm_regs, kvm_sregs,
 };
 use kvm_ioctls::{VcpuExit, VcpuFd, VmFd};
 
@@ -26,20 +27,22 @@ pub enum Error {
 
 type Result<T> = core::result::Result<T, Error>;
 
-bitflags! {
-    pub struct CR4Flags: u64 {
-        const DE        = 0x1 <<  3;
-        const OSFXSR    = 0x1 <<  9;
-        const OSXSAVE   = 0x1 << 18;
-    }
-}
+/// CR0: Protection Enabled
+const CR0_PE: u64 = 1 << 0;
+/// CR0: Paging
+const CR0_PG: u64 = 1 << 31;
 
-bitflags! {
-    pub struct EFERFlags: u64 {
-        const LME        = 0x1 <<  8;
-        const LMA        = 0x1 << 10;
-    }
-}
+/// CR4: Debugging Extensions
+const CR4_DE: u64 = 0x1 << 3;
+/// CR4: Physical-Address Extension
+const CR4_PAE: u64 = 0x1 << 5;
+/// CR4: Page-Global Enable
+const CR4_PGE: u64 = 0x1 << 7;
+
+/// Long Mode Enabled
+const EFER_LME: u64 = 0x1 << 8;
+/// Long Mode Active
+const EFER_LMA: u64 = 0x1 << 10;
 
 pub struct Vcpu {
     inner: VcpuFd,
@@ -80,20 +83,47 @@ impl Vcpu {
         Ok(self.sregs.get())
     }
 
-    pub fn setup_registers(&mut self) -> Result<()> {
+    pub fn setup_registers(
+        &mut self,
+        paging: VirtAddr,
+        gdt: VirtAddr,
+        idt: VirtAddr,
+        stack: VirtAddr,
+        entry: VirtAddr,
+    ) -> Result<()> {
         // Special Register
         self.refresh_regs()?;
         self.sregs.mutate(|sregs| {
-            sregs.cr0 = 0x0;
-            sregs.cr4 = (CR4Flags::DE | CR4Flags::OSFXSR | CR4Flags::OSXSAVE).bits();
-            sregs.efer = (EFERFlags::LMA | EFERFlags::LME).bits();
+            // set GDT (Guest will use LGDT later to update the GDT localtion)
+            sregs.gdt = kvm_dtable {
+                base: gdt.as_u64(),
+                limit: GDT_SIZE as __u16,
+                padding: [0; 3usize],
+            };
+
+            // set IDT (Guest will use LIDT later to update the IDT localtion)
+            sregs.idt = kvm_dtable {
+                base: idt.as_u64(),
+                limit: IDT_SIZE as __u16,
+                padding: [0; 3usize],
+            };
+
+            // enable protected mode and paging
+            sregs.cr0 = CR0_PE | CR0_PG;
+            // set the paging address
+            sregs.cr3 = paging.as_u64();
+            // set DEbug, and Physical-Address Extension, Page-Global Enable
+            sregs.cr4 = CR4_DE | CR4_PAE | CR4_PGE;
+            // set Long-Mode Active and Long-Mode Enabled
+            sregs.efer |= EFER_LMA | EFER_LME;
             true
         });
 
         // "Normal" Register
         self.regs.mutate(|regs| {
-            regs.rflags = 0x2;
-            regs.rdx = 0x0;
+            regs.rflags = 1 << 1;
+            regs.rip = entry.as_u64();
+            regs.rsp = stack.as_u64();
             true
         });
 

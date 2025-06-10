@@ -6,4 +6,4 @@ members = [
     "bmvm_host",
     "examples/guest",
     "bmvm_macros"
-, "examples/host"]
+, "examples/host", "examples/longmode"]

@@ -1,13 +1,17 @@
-use crate::BMVM_GUEST_TMP_SYSTEM_SIZE;
-use crate::alloc::{Manager, ReadWrite};
+use crate::alloc::{Allocator, ReadWrite, Region};
 use crate::elf::ExecBundle;
-use crate::vm::vcpu;
 use crate::vm::vcpu::Vcpu;
-use bmvm_common::mem::LayoutTableEntry;
-use bmvm_common::{BMVM_MEM_LAYOUT_TABLE, BMVM_TMP_GDT, BMVM_TMP_IDT, BMVM_TMP_PAGING};
-use kvm_bindings::KVM_API_VERSION;
-use kvm_ioctls::{Cap, Kvm, VmFd};
+use crate::vm::{setup, vcpu};
+use crate::{BMVM_GUEST_DEFAULT_STACK_SIZE, BMVM_GUEST_TMP_SYSTEM_SIZE};
+use bmvm_common::mem::{LayoutTableEntry, PhysAddr};
+use bmvm_common::{
+    BMVM_MEM_LAYOUT_TABLE, BMVM_TMP_GDT, BMVM_TMP_IDT, BMVM_TMP_PAGING, BMVM_TMP_SYS,
+};
+use kvm_bindings::{KVM_API_VERSION, kvm_userspace_memory_region};
+use kvm_ioctls::{Cap, Kvm, VcpuExit, VmFd};
 use std::num::NonZeroUsize;
+
+type Result<T> = core::result::Result<T, Error>;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -19,19 +23,44 @@ pub enum Error {
     KvmMissingCapability(Cap),
     #[error("VM error: {0:?}")]
     Vm(kvm_ioctls::Error),
+    #[error("Memory mapping not found: {0:?}")]
+    VmMemoryMappingNotFound(PhysAddr),
+    #[error("Memory request exceeds max memory: {0}")]
+    VmMemoryRequestExceedsMaxMemory(u64),
     #[error("VCPU error: {0:?}")]
     Vcpu(#[from] vcpu::Error),
+    #[error("Setup error: {0:?}")]
+    Setup(#[from] setup::Error),
+    #[error("Allocator error: {0:?}")]
+    Allocator(#[from] crate::alloc::Error),
+}
+
+#[derive(Debug)]
+pub struct Config {
+    stack_size: NonZeroUsize,
+    max_memory: u64,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            stack_size: NonZeroUsize::new(BMVM_GUEST_DEFAULT_STACK_SIZE).unwrap(),
+            max_memory: 1024 * 1024 * 1024,
+        }
+    }
 }
 
 pub struct Vm {
+    cfg: Config,
     kvm: Kvm,
     vm: VmFd,
     vcpu: Vcpu,
-    manager: Manager,
+    manager: Allocator,
+    mem_mappings: Vec<Region<ReadWrite>>,
 }
 
 impl Vm {
-    pub fn new() -> Result<Self, Error> {
+    pub(crate) fn new<C: Into<Config>>(cfg: C) -> Result<Self> {
         let kvm = Kvm::new().map_err(|e| Error::Kvm(e))?;
         let version = kvm.get_api_version();
         if version != KVM_API_VERSION as i32 {
@@ -50,34 +79,127 @@ impl Vm {
         let vcpu = Vcpu::new(&vm, 0)?;
 
         // create a region manager
-        let manager = Manager::new(&vm);
+        let manager = Allocator::new(&vm);
 
         Ok(Self {
+            cfg: cfg.into(),
             kvm,
             vm,
             vcpu,
             manager,
+            mem_mappings: Vec::new(),
         })
+    }
+
+    pub(crate) fn load_exec(&mut self, exec: &mut ExecBundle) -> Result<()> {
+        // prepare the system region
+        let sys = self.setup_long_mode_env(exec)?;
+        self.mem_mappings.push(sys);
+
+        // move all execution relevant regions to the vm
+        self.mem_mappings.append(&mut exec.mem_regions);
+
+        // allocate a stack region
+        // TODO: Investigate why BMVM_STACK address throwns EINVAL (22)
+        let stack = self.alloc_stack(self.cfg.stack_size, PhysAddr::new(0x1000000))?;
+        self.mem_mappings.push(stack);
+
+        // setup the CPU registers
+        self.vcpu.setup_registers(
+            BMVM_TMP_PAGING.as_virt_addr(),
+            BMVM_TMP_GDT.as_virt_addr(),
+            BMVM_TMP_IDT.as_virt_addr(),
+            PhysAddr::new(0x1000000).as_virt_addr(),
+            exec.entry.as_virt_addr(),
+        )?;
+
+        unsafe {
+            // map all regions to the guest
+            for (slot, r) in self.mem_mappings.iter().enumerate() {
+                let mapping = kvm_userspace_memory_region {
+                    slot: slot as u32,
+                    flags: 0,
+                    guest_phys_addr: r.guest_addr().unwrap().as_u64(),
+                    memory_size: r.capacity() as u64,
+                    userspace_addr: r.as_ptr() as u64,
+                };
+                self.vm
+                    .set_user_memory_region(mapping)
+                    .map_err(|e| Error::Vm(e))?;
+            }
+        }
+
+        // #[cfg(feature = "debug")]
+        self.vcpu.enable_single_step()?;
+
+        Ok(())
+    }
+
+    pub(crate) fn run(&mut self) -> Result<()> {
+        loop {
+            match self.vcpu.run()? {
+                VcpuExit::IoOut(port, data) => {
+                    println!(
+                        "IO write on port {:#x} with data {:#x} -> {}",
+                        port, data[0], data[0] as char
+                    )
+                }
+                VcpuExit::IoIn(port, data) => {
+                    println!("IO read on port {:#x} with data {:#x}", port, data[0])
+                }
+                VcpuExit::Hlt => {
+                    println!("Halt called -> shutdown vm");
+                    break;
+                }
+                VcpuExit::Debug(_) => {
+                    self.print_debug_info();
+                }
+                reason => {
+                    println!("Unexpected exit reason: {:?}", reason);
+                    self.print_debug_info();
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Expose the guest memory allocator used by this VM instance
+    pub fn allocatort(&self) -> &Allocator {
+        &self.manager
+    }
+
+    fn alloc_stack(&mut self, capacity: NonZeroUsize, base: PhysAddr) -> Result<Region<ReadWrite>> {
+        let mut region = self
+            .manager
+            .alloc_accessible::<ReadWrite>(capacity)
+            .map_err(|e| Error::Allocator(e))?;
+
+        region.set_guest_addr(base);
+
+        Ok(region)
     }
 
     /// Setting up a minimal environment containing paging structure, IDT and GDT to be able to enter
     /// long mode and start with the actual structure setup by the guest.
-    fn setup_long_mode_env(&mut self, exec: &ExecBundle, manager: &Manager) -> anyhow::Result<()> {
-        // allocate a region for the temporary system strutures
+    fn setup_long_mode_env(&mut self, exec: &ExecBundle) -> Result<Region<ReadWrite>> {
+        // allocate a region for the temporary system structures
         let size_tmp_sys = NonZeroUsize::new(BMVM_GUEST_TMP_SYSTEM_SIZE as usize).unwrap();
-        let mut temp_sys_region = manager.alloc_accessible::<ReadWrite>(size_tmp_sys)?;
+        let mut temp_sys_region = self.manager.alloc_accessible::<ReadWrite>(size_tmp_sys)?;
+        temp_sys_region.set_guest_addr(BMVM_TMP_SYS);
 
         // estimate the system region
         let mut layout = exec.layout.clone();
-        let layout_sys = crate::vm::setup::estimate_sys_region(&layout)?;
+        let layout_sys = setup::estimate_sys_region(&layout)?;
         layout.insert(0, layout_sys);
 
         // write GDT
-        temp_sys_region.write_offset(BMVM_TMP_GDT.as_usize(), crate::vm::setup::gdt().as_ref())?;
+        temp_sys_region.write_offset(BMVM_TMP_GDT.as_usize(), setup::gdt().as_ref())?;
         // write LDT
-        temp_sys_region.write_offset(BMVM_TMP_IDT.as_usize(), crate::vm::setup::idt().as_ref())?;
+        temp_sys_region.write_offset(BMVM_TMP_IDT.as_usize(), setup::idt().as_ref())?;
         // write paging
-        for (idx, entry) in crate::vm::setup::paging(&layout).iter() {
+        for (idx, entry) in setup::paging(&layout).iter() {
             let offset = idx * 8;
             temp_sys_region.write_offset(BMVM_TMP_PAGING.as_u64() as usize + offset, entry)?;
         }
@@ -89,6 +211,37 @@ impl Vm {
                 .write_offset(BMVM_MEM_LAYOUT_TABLE.as_usize() + offset, &entry.as_array())?;
         }
 
+        Ok(temp_sys_region)
+    }
+
+    fn print_debug_info(&mut self) -> Result<()> {
+        let regs = self.vcpu.get_regs()?;
+        // Store the rip value to avoid holding the mutable borrow
+        let rip = regs.rip;
+        // Print registers before getting memory to avoid borrow conflict
+        println!("DEBUG: register -> {:?}", regs);
+        let mem = self.get_memory_at(rip, 8)?;
+        println!("DEBUG: memory at {:x} -> {:x?}", rip, mem.as_slice());
         Ok(())
+    }
+
+    /// Try reading the guest memory
+    fn get_memory_at(&self, addr: u64, length: u64) -> Result<Vec<u8>> {
+        let end = addr + length;
+        for r in self.mem_mappings.iter() {
+            let guest_addr = r.guest_addr().unwrap().as_u64();
+            let size = r.capacity();
+            if (guest_addr..(guest_addr + size as u64)).contains(&addr) {
+                if end >= guest_addr + size as u64 {
+                    return Err(Error::VmMemoryRequestExceedsMaxMemory(length));
+                }
+
+                let v_start = addr - guest_addr;
+                let v_end = end - guest_addr;
+                return Ok(r.as_ref()[v_start as usize..v_end as usize].to_vec());
+            }
+        }
+
+        Err(Error::VmMemoryMappingNotFound(PhysAddr::new(addr)))
     }
 }

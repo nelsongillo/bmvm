@@ -1,10 +1,10 @@
 #[derive(Debug)]
 pub struct Func {}
 
-struct Linker {}
+pub struct Linker {}
 
 impl Linker {
-    pub fn new(cfg: LinkerConfig) -> Self {
+    pub fn new(_cfg: LinkerConfig) -> Self {
         Self {}
     }
 }
