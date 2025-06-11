@@ -165,11 +165,9 @@ impl LayoutTableEntry {
             DefaultAlign::is_aligned(addr.as_u64()),
             "addr must be page aligned"
         );
-        assert_ne!(0, size, "size must not be zero");
-        assert_eq!(
-            size,
-            size & (Self::MASK_RETRIEVE_SIZE >> 8) as u32,
-            "size must not exceed 20 bits"
+        assert!(
+            Self::is_valid_size(size),
+            "size must not be zero and exceed 20 bits"
         );
         let mut value = flags.bits() as u64;
 
@@ -249,6 +247,11 @@ impl LayoutTableEntry {
     #[inline]
     pub const fn as_array(&self) -> [u8; 8] {
         self.0.to_le_bytes()
+    }
+
+    #[inline]
+    pub const fn is_valid_size(size: u32) -> bool {
+        size > 0 && size == size & (Self::MASK_RETRIEVE_SIZE >> 8) as u32
     }
 }
 

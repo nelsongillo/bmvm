@@ -1,5 +1,4 @@
-use bmvm_common::registry::Serializable;
-use bmvm_host::{Config, Runtime, expose};
+use bmvm_host::{Config, Runtime};
 use std::env::args;
 
 // TODO: Why trigger KVM_EXIT_SHUTDOWN on entry?! probably

@@ -1,9 +1,11 @@
 mod addr;
 mod align;
+mod bits;
 mod layout;
 
 pub use addr::*;
 pub use align::*;
+pub use bits::*;
 pub use layout::*;
 
 #[inline]
@@ -17,7 +19,7 @@ pub fn aligned_and_fits<A: Align>(from: u64, to: u64) -> bool {
 
 mod tests {
     #![allow(unused_imports)]
-    use crate::mem::{Page1GiB, Page2MiB, Page4KiB, aligned_and_fits};
+    use crate::mem::{Page2MiB, Page4KiB, aligned_and_fits};
 
     #[test]
     fn not_aligned() {

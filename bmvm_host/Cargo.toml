@@ -4,13 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-anyhow = "1.0.98"
 nix = { version = "0.30.1", features = ["mman"] }
 goblin = "0.10.0"
 kvm-ioctls = "0.22.0"
 kvm-bindings = "0.12.0"
 sealed = "0.6.0"
-bitflags = "2.9.1"
 thiserror = "2.0.12"
 
 bmvm-common = {path = "../bmvm_common", features = ["std"]}

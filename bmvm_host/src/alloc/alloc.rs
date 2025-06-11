@@ -118,9 +118,6 @@ impl<P: Perm, A: Align> Region<P, A> {
             StorageBackend::GuestMem(_) => {
                 panic!("tried to get ptr from guest memory");
             }
-            StorageBackend::Mmap(ptr) if ptr.as_ptr().is_null() => {
-                panic!("tried to get region pointer but is null");
-            }
             StorageBackend::Mmap(ptr) => ptr.as_ptr(),
         }
     }

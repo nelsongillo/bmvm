@@ -1,4 +1,4 @@
-use crate::{BMVM_GUEST_SYSTEM, BMVM_MIN_TEXT_SEGMENT};
+use crate::{GUEST_SYSTEM_ADDR, MIN_TEXT_SEGMENT};
 use bmvm_common::BMVM_TMP_PAGING;
 use bmvm_common::mem::{
     Align, DefaultAlign, Flags, LayoutTableEntry, Page1GiB, Page2MiB, Page4KiB, VirtAddr,
@@ -9,17 +9,10 @@ use std::collections::HashSet;
 // Values used for system region requirement estimation
 // ------------------------------------------------------------------------------------------------
 const PAGE_TABLE_SIZE: u64 = 0x1000;
-const NUM_SYS_BUFFER_PAGES: u64 = 4;
 pub(super) const IDT_SIZE: u64 = 0x1000;
 pub(super) const GDT_SIZE: u64 = 0x1000;
 const IDT_PAGE_REQUIRED: usize = (align_ceil(IDT_SIZE) / DefaultAlign::ALIGNMENT) as usize;
 const GDT_PAGE_REQUIRED: usize = (align_ceil(GDT_SIZE) / DefaultAlign::ALIGNMENT) as usize;
-
-// Temporary system structure
-// ------------------------------------------------------------------------------------------------
-const IDT_LOCATION: u64 = 0x0000;
-const GDT_LOCATION: u64 = 0x1000;
-const PAGING_LOCATION: u64 = 0x2000;
 
 // Paging Entry Flags
 // ------------------------------------------------------------------------------------------------
@@ -74,10 +67,10 @@ pub(crate) fn paging(layout: &Vec<LayoutTableEntry>) -> Vec<(usize, [u8; 8])> {
     let mut non_sys_pages = cound_non_sys_pages(layout) as isize;
     let mut idx = 0;
     while non_sys_pages > 0 {
-        let addr = BMVM_MIN_TEXT_SEGMENT + idx * Page1GiB::ALIGNMENT;
+        let addr = MIN_TEXT_SEGMENT + idx * Page1GiB::ALIGNMENT;
         output.push((
             (512 + idx) as usize,
-            paging_entry(addr.as_virt_addr(), true, true),
+            paging_entry(VirtAddr::new_truncate(addr), true, true),
         ));
         non_sys_pages -= (Page1GiB::ALIGNMENT / Page4KiB::ALIGNMENT) as isize;
         idx += 1;
@@ -85,13 +78,11 @@ pub(crate) fn paging(layout: &Vec<LayoutTableEntry>) -> Vec<(usize, [u8; 8])> {
 
     // entries for the system region
     // a general 1GiB sized region will be mapped to be used for paging.
+    let sys_addr = GUEST_SYSTEM_ADDR().as_virt_addr();
     let pdpt_2 = VirtAddr::new_truncate(BMVM_TMP_PAGING.as_u64() + PAGE_TABLE_SIZE * 2);
-    let pml4_sys_idx = BMVM_GUEST_SYSTEM.as_virt_addr().p4_index();
+    let pml4_sys_idx = sys_addr.p4_index();
     output.push((pml4_sys_idx.into(), paging_entry(pdpt_2, false, false)));
-    output.push((
-        1024,
-        paging_entry(BMVM_GUEST_SYSTEM.as_virt_addr(), true, false),
-    ));
+    output.push((1024, paging_entry(sys_addr, true, false)));
 
     output
 }
@@ -110,7 +101,7 @@ pub(super) fn estimate_sys_region(base: &Vec<LayoutTableEntry>) -> Result<Layout
     let (pml4, pdpt, pdt, pt) = estimate_page_count(&layout);
     let mut estimate = pml4 + pdpt + pdt + pt + IDT_PAGE_REQUIRED + GDT_PAGE_REQUIRED;
     loop {
-        let sys = LayoutTableEntry::new(BMVM_GUEST_SYSTEM, estimate as u32, Flags::empty());
+        let sys = LayoutTableEntry::new(GUEST_SYSTEM_ADDR(), estimate as u32, Flags::empty());
         layout.push(sys);
 
         // estimate has converged to stable value -> break and return final estimate
@@ -129,7 +120,7 @@ pub(super) fn estimate_sys_region(base: &Vec<LayoutTableEntry>) -> Result<Layout
     }
     // the user required space + IDT + GDT (in pages); The space for the page tables managing the sys region
     Ok(LayoutTableEntry::new(
-        BMVM_GUEST_SYSTEM,
+        GUEST_SYSTEM_ADDR(),
         estimate as u32,
         Flags::PRESENT,
     ))

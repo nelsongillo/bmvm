@@ -2,7 +2,7 @@ use crate::alloc::{Allocator, ReadWrite, Region};
 use crate::elf::ExecBundle;
 use crate::vm::vcpu::Vcpu;
 use crate::vm::{setup, vcpu};
-use crate::{BMVM_GUEST_DEFAULT_STACK_SIZE, BMVM_GUEST_TMP_SYSTEM_SIZE};
+use crate::{GUEST_DEFAULT_STACK_SIZE, GUEST_STACK_ADDR, GUEST_TMP_SYSTEM_SIZE};
 use bmvm_common::mem::{LayoutTableEntry, PhysAddr};
 use bmvm_common::{
     BMVM_MEM_LAYOUT_TABLE, BMVM_TMP_GDT, BMVM_TMP_IDT, BMVM_TMP_PAGING, BMVM_TMP_SYS,
@@ -44,7 +44,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            stack_size: NonZeroUsize::new(BMVM_GUEST_DEFAULT_STACK_SIZE).unwrap(),
+            stack_size: NonZeroUsize::new(GUEST_DEFAULT_STACK_SIZE).unwrap(),
             max_memory: 1024 * 1024 * 1024,
         }
     }
@@ -109,7 +109,7 @@ impl Vm {
             BMVM_TMP_PAGING.as_virt_addr(),
             BMVM_TMP_GDT.as_virt_addr(),
             BMVM_TMP_IDT.as_virt_addr(),
-            PhysAddr::new(0x1000000).as_virt_addr(),
+            GUEST_STACK_ADDR().as_virt_addr(),
             exec.entry.as_virt_addr(),
         )?;
 
@@ -152,11 +152,11 @@ impl Vm {
                     break;
                 }
                 VcpuExit::Debug(_) => {
-                    self.print_debug_info();
+                    self.print_debug_info()?;
                 }
                 reason => {
                     println!("Unexpected exit reason: {:?}", reason);
-                    self.print_debug_info();
+                    self.print_debug_info()?;
                     break;
                 }
             }
@@ -185,7 +185,7 @@ impl Vm {
     /// long mode and start with the actual structure setup by the guest.
     fn setup_long_mode_env(&mut self, exec: &ExecBundle) -> Result<Region<ReadWrite>> {
         // allocate a region for the temporary system structures
-        let size_tmp_sys = NonZeroUsize::new(BMVM_GUEST_TMP_SYSTEM_SIZE as usize).unwrap();
+        let size_tmp_sys = NonZeroUsize::new(GUEST_TMP_SYSTEM_SIZE as usize).unwrap();
         let mut temp_sys_region = self.manager.alloc_accessible::<ReadWrite>(size_tmp_sys)?;
         temp_sys_region.set_guest_addr(BMVM_TMP_SYS);
 
