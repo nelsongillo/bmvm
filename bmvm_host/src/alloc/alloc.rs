@@ -1,11 +1,10 @@
 use crate::alloc::{Accessible, GuestOnly, Perm, ReadOnly, ReadWrite, WriteOnly};
-use bmvm_common::mem::{Align, DefaultAlign, PhysAddr};
+use bmvm_common::mem::{Align, AlignedNonZeroUsize, DefaultAlign, PhysAddr};
 use core::ffi::c_void;
 use kvm_bindings::kvm_create_guest_memfd;
 use kvm_ioctls::{Cap, VmFd};
 use nix::sys::mman::{MapFlags, ProtFlags, mmap_anonymous};
 use std::cmp::min;
-use std::num::NonZeroUsize;
 use std::os::fd::RawFd;
 use std::panic;
 use std::ptr::NonNull;
@@ -335,38 +334,39 @@ impl Allocator {
 
     pub fn alloc<P: Perm>(
         &self,
-        capacity: NonZeroUsize,
+        capacity: AlignedNonZeroUsize,
         vm: &VmFd,
     ) -> Result<Region<P, DefaultAlign>, Error> {
         self.allocate::<P>(capacity, vm)
     }
 
-    pub fn alloc_accessible<P>(&self, capacity: NonZeroUsize) -> Result<Region<P>, Error>
+    pub fn alloc_accessible<P>(&self, capacity: AlignedNonZeroUsize) -> Result<Region<P>, Error>
     where
         P: Perm + Accessible,
     {
         self.mmap::<P>(capacity)
     }
 
-    fn allocate<P: Perm>(&self, capacity: NonZeroUsize, vm: &VmFd) -> Result<Region<P>, Error> {
-        let aligned_cap = DefaultAlign::align_ceil(capacity.get() as u64);
-        let cap = NonZeroUsize::new(aligned_cap as usize).unwrap();
-
+    fn allocate<P: Perm>(
+        &self,
+        capacity: AlignedNonZeroUsize,
+        vm: &VmFd,
+    ) -> Result<Region<P>, Error> {
         let flags = P::prot_flags();
         if flags.contains(ProtFlags::PROT_NONE) {
-            self.guest_memfd(cap, vm)
+            self.guest_memfd(capacity, vm)
         } else {
-            self.mmap(cap)
+            self.mmap(capacity)
         }
     }
 
-    fn mmap<P>(&self, capacity: NonZeroUsize) -> Result<Region<P>, Error>
+    fn mmap<P>(&self, capacity: AlignedNonZeroUsize) -> Result<Region<P>, Error>
     where
         P: Perm,
     {
         let flags = P::prot_flags();
         // mmap a region with the required size and flags
-        let mem = unsafe { mmap_anonymous(None, capacity, flags, self.m_flags) }?;
+        let mem = unsafe { mmap_anonymous(None, capacity.get_non_zero(), flags, self.m_flags) }?;
 
         let region = Region {
             physical_addr: None,
@@ -382,7 +382,11 @@ impl Allocator {
     }
 
     // TODO: implement me
-    fn guest_memfd<P: Perm>(&self, capacity: NonZeroUsize, vm: &VmFd) -> Result<Region<P>, Error> {
+    fn guest_memfd<P: Perm>(
+        &self,
+        capacity: AlignedNonZeroUsize,
+        vm: &VmFd,
+    ) -> Result<Region<P>, Error> {
         let gmem = kvm_create_guest_memfd {
             size: capacity.get() as u64,
             flags: 0,

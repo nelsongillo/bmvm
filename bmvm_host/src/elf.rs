@@ -1,15 +1,14 @@
 use crate::alloc::*;
 
 use bmvm_common::mem::{
-    Align, DefaultAlign, Flags, LayoutTableEntry, MAX_REGION_SIZE, PhysAddr, align_ceil,
-    align_floor,
+    Align, AlignedNonZeroUsize, DefaultAlign, Flags, LayoutTableEntry, MAX_REGION_SIZE, PhysAddr,
+    align_ceil, align_floor,
 };
 use goblin::elf;
 use goblin::elf::{Elf, Header, ProgramHeader};
 use goblin::elf32::header::machine_to_str;
 use std::fmt::Debug;
 use std::fs;
-use std::num::NonZeroUsize;
 use std::path::Path;
 
 #[cfg(target_arch = "x86_64")]
@@ -124,7 +123,7 @@ impl ExecBundle {
             layout.push(Self::build_layout_table_entry(idx, ph, to_alloc, &elf)?);
 
             // allocate + copy file content to region
-            let req_capacity = NonZeroUsize::new(to_alloc as usize).unwrap();
+            let req_capacity = AlignedNonZeroUsize::new_ceil(to_alloc as usize).unwrap();
             let mut mem = manager.alloc_accessible::<ReadWrite>(req_capacity)?;
             let to_cpy =
                 &buf.as_ref()[ph.p_offset as usize..(ph.p_offset as usize + ph.p_filesz as usize)];

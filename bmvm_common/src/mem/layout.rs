@@ -98,6 +98,7 @@ bitflags! {
         const CODE = 1 << 2;
         /// 0 -> Read; 1 -> Write
         const WRITE = 1 << 3;
+        const STACK = 1 << 4;
         // const have no real purpose besides making it more explicit to create
         // eg: a user read only data section. Using USER | READ | DATA is the same as Flags::empty()
         // but more explicit.
@@ -147,6 +148,7 @@ pub struct LayoutTableEntry(u64);
 ///     0 -> Read
 ///    Else:
 ///     Unused
+/// 4: Stack
 /// 8-24: multiplicator of pages
 /// 24-63: starting address
 impl LayoutTableEntry {
@@ -221,7 +223,7 @@ impl LayoutTableEntry {
 
     pub fn flags(&self) -> Flags {
         let f = self.0 & Self::MASK_RETRIEVE_FLAGS;
-        Flags::from_bits_retain(f as u8)
+        Flags::from_bits_truncate(f as u8)
     }
 
     /// Gets the number of pages included in the entry
@@ -300,5 +302,13 @@ mod test {
         }
 
         assert_eq!(5, layout.len_present())
+    }
+
+    #[test]
+    fn contains_vs_intersects() {
+        let base = Flags::PRESENT | Flags::SYSTEM;
+
+        assert!(base.contains(Flags::SYSTEM));
+        assert!(base.intersects(Flags::SYSTEM));
     }
 }

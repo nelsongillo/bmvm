@@ -1,4 +1,4 @@
-use crate::{GUEST_SYSTEM_ADDR, MIN_TEXT_SEGMENT};
+use crate::{GUEST_DEFAULT_STACK_SIZE, GUEST_STACK_ADDR, GUEST_SYSTEM_ADDR, MIN_TEXT_SEGMENT};
 use bmvm_common::BMVM_TMP_PAGING;
 use bmvm_common::mem::{
     Align, DefaultAlign, Flags, LayoutTableEntry, Page1GiB, Page2MiB, Page4KiB, VirtAddr,
@@ -49,6 +49,7 @@ pub(crate) fn gdt() -> Vec<u8> {
 /// program to execute properly:
 /// * Code region including
 /// * System region (be able to construct runtime paging structures etc)
+/// * Stack
 ///
 /// # Returns
 /// Vector of index and page entry.
@@ -59,32 +60,89 @@ pub(crate) fn gdt() -> Vec<u8> {
 pub(crate) fn paging(layout: &Vec<LayoutTableEntry>) -> Vec<(usize, [u8; 8])> {
     let mut output: Vec<(usize, [u8; 8])> = Vec::new();
 
+    let pdpt_to_addr = |pdpt: usize| {
+        VirtAddr::new_truncate(BMVM_TMP_PAGING.as_u64() + PAGE_TABLE_SIZE * (pdpt / 512) as u64)
+    };
+
+    // PML4 Entries
+    let mut pml4 = HashSet::new();
+    let mut pdpt: usize = 512;
+
     // entries for code and data segments
-    // assuming the .text, .data, .rodata, .bss etc sections are all loaded continuously beginning
-    // at well-defined address, we can very roughly create paging entries for the continuo region.
-    let pdpt_1 = VirtAddr::new_truncate(BMVM_TMP_PAGING.as_u64() + PAGE_TABLE_SIZE);
-    output.push((0, paging_entry(pdpt_1, false, false)));
-    let mut non_sys_pages = cound_non_sys_pages(layout) as isize;
-    let mut idx = 0;
-    while non_sys_pages > 0 {
-        let addr = MIN_TEXT_SEGMENT + idx * Page1GiB::ALIGNMENT;
+    let (code, size_code) = page_code(&layout);
+    output.push((
+        code.p4_index().into(),
+        paging_entry(pdpt_to_addr(pdpt), false, true),
+    ));
+    create_entry_for_size(&mut output, pdpt, code, size_code);
+    pml4.insert(code.p4_index());
+
+    // entries for the stack
+    let (stack, size_stack) = page_with_flags(layout, Flags::STACK).unwrap_or((
+        VirtAddr::new_truncate(Page1GiB::align_floor(GUEST_STACK_ADDR().as_u64())),
+        GUEST_DEFAULT_STACK_SIZE,
+    ));
+    if pml4.insert(stack.p4_index()) {
+        pdpt += 512;
         output.push((
-            (512 + idx) as usize,
-            paging_entry(VirtAddr::new_truncate(addr), true, true),
+            stack.p4_index().into(),
+            paging_entry(pdpt_to_addr(pdpt), false, false),
         ));
-        non_sys_pages -= (Page1GiB::ALIGNMENT / Page4KiB::ALIGNMENT) as isize;
-        idx += 1;
     }
+    create_entry_for_size(&mut output, pdpt, stack, size_stack);
 
     // entries for the system region
-    // a general 1GiB sized region will be mapped to be used for paging.
-    let sys_addr = GUEST_SYSTEM_ADDR().as_virt_addr();
-    let pdpt_2 = VirtAddr::new_truncate(BMVM_TMP_PAGING.as_u64() + PAGE_TABLE_SIZE * 2);
-    let pml4_sys_idx = sys_addr.p4_index();
-    output.push((pml4_sys_idx.into(), paging_entry(pdpt_2, false, false)));
-    output.push((1024, paging_entry(sys_addr, true, false)));
+    let (sys, size_sys) = page_with_flags(&layout, Flags::SYSTEM).unwrap_or((
+        GUEST_SYSTEM_ADDR().as_virt_addr(),
+        Page1GiB::ALIGNMENT as usize,
+    ));
+    if pml4.insert(sys.p4_index()) {
+        pdpt += 512;
+        output.push((
+            sys.p4_index().into(),
+            paging_entry(pdpt_to_addr(pdpt), false, false),
+        ));
+    }
+    create_entry_for_size(&mut output, pdpt, sys, size_sys);
 
     output
+}
+
+// entries for code and data segments
+// assuming the .text, .data, .rodata, .bss etc sections are all loaded continuously beginning
+// at well-defined address, we can very roughly create paging entries for the continuo region.
+fn page_code(layout: &Vec<LayoutTableEntry>) -> (VirtAddr, usize) {
+    let addr = Page1GiB::align_floor(MIN_TEXT_SEGMENT);
+    let size = Page1GiB::align_ceil(cound_non_sys_size(layout));
+    (VirtAddr::new_truncate(addr), size as usize)
+}
+
+fn page_with_flags(layout: &Vec<LayoutTableEntry>, flags: Flags) -> Option<(VirtAddr, usize)> {
+    layout
+        .iter()
+        .find(|entry| entry.flags().contains(flags))
+        .and_then(|entry| {
+            Some((
+                entry.addr().as_virt_addr(),
+                Page1GiB::align_ceil(entry.size()) as usize,
+            ))
+        })
+}
+
+fn create_entry_for_size(
+    out: &mut Vec<(usize, [u8; 8])>,
+    pdpt: usize,
+    addr: VirtAddr,
+    size: usize,
+) {
+    let mut left = size as isize;
+    let mut base = addr;
+    while left > 0 {
+        let idx: usize = base.p3_index().into();
+        out.push((pdpt + idx, paging_entry(base, true, true)));
+        left -= Page1GiB::ALIGNMENT as isize;
+        base += Page1GiB::ALIGNMENT;
+    }
 }
 
 /// Based on the provided layout, the size of the system region will be estimated and
@@ -193,7 +251,7 @@ const fn gdt_entry(base: u64, limit: u64, access_byte: u8, flags: u8) -> [u8; 8]
 /// create a new paging entry
 fn paging_entry(addr: VirtAddr, huge: bool, exec: bool) -> [u8; 8] {
     assert!(Page4KiB::is_aligned(addr.as_u64()));
-    let mut value: u64 = PAGE_FLAG_PRESENT | PAGE_FLAG_WRITE | PAGE_FLAG_USER;
+    let mut value: u64 = PAGE_FLAG_PRESENT | PAGE_FLAG_WRITE;
     value |= addr.as_u64() & 0xFFFF_FFFF_FFFF_F000;
 
     if huge {
@@ -208,11 +266,11 @@ fn paging_entry(addr: VirtAddr, huge: bool, exec: bool) -> [u8; 8] {
 }
 
 /// count all non-system sections and return the total number of required pages.
-fn cound_non_sys_pages(layout: &Vec<LayoutTableEntry>) -> usize {
+fn cound_non_sys_size(layout: &Vec<LayoutTableEntry>) -> u64 {
     let mut size = 0;
     layout.iter().for_each(|entry| {
-        if !entry.flags().contains(Flags::SYSTEM) {
-            size += entry.len() as usize
+        if !entry.flags().intersects(Flags::SYSTEM | Flags::STACK) {
+            size += entry.size()
         }
     });
 
@@ -401,6 +459,13 @@ mod test {
         ];
 
         assert_eq!(4, paging(&base).len());
+    }
+
+    #[test]
+    fn paging_entry_construction() {
+        let expected = [0, 0, 0, 0, 0, 0x12, 0x30, 0b1000_0111];
+        let result = paging_entry(VirtAddr::new(0x123000), true, true);
+        assert_eq!(expected, result);
     }
 
     // shortcut to creating a present entry with size

@@ -34,6 +34,9 @@ const CR0_PG: u64 = 1 << 31;
 
 /// CR4: Debugging Extensions
 const CR4_DE: u64 = 0x1 << 3;
+
+/// CR4: Page Size Extension
+const CR4_PSE: u64 = 0x1 << 4;
 /// CR4: Physical-Address Extension
 const CR4_PAE: u64 = 0x1 << 5;
 /// CR4: Page-Global Enable
@@ -83,6 +86,11 @@ impl Vcpu {
         Ok(self.sregs.get())
     }
 
+    pub fn get_all_regs(&mut self) -> Result<(&kvm_regs, &kvm_sregs)> {
+        self.refresh_regs()?;
+        Ok((self.regs.get(), self.sregs.get()))
+    }
+
     pub fn setup_registers(
         &mut self,
         paging: VirtAddr,
@@ -101,6 +109,16 @@ impl Vcpu {
                 padding: [0; 3usize],
             };
 
+            // Point to code selector
+            sregs.cs.selector = 0x08;
+            sregs.cs.base = 0;
+            sregs.cs.l = 1;
+
+            // Point to data selector
+            sregs.ds.selector = 0x10;
+            sregs.ds.base = 0;
+            sregs.ds.l = 1;
+
             // set IDT (Guest will use LIDT later to update the IDT localtion)
             sregs.idt = kvm_dtable {
                 base: idt.as_u64(),
@@ -113,7 +131,7 @@ impl Vcpu {
             // set the paging address
             sregs.cr3 = paging.as_u64();
             // set DEbug, and Physical-Address Extension, Page-Global Enable
-            sregs.cr4 = CR4_DE | CR4_PAE | CR4_PGE;
+            sregs.cr4 = CR4_DE | CR4_PSE | CR4_PAE | CR4_PGE;
             // set Long-Mode Active and Long-Mode Enabled
             sregs.efer |= EFER_LMA | EFER_LME;
             true
@@ -121,7 +139,9 @@ impl Vcpu {
 
         // "Normal" Register
         self.regs.mutate(|regs| {
+            regs.rax = u64::MAX;
             regs.rflags = 1 << 1;
+            regs.rflags |= 0x100;
             regs.rip = entry.as_u64();
             regs.rsp = stack.as_u64();
             true
@@ -130,7 +150,7 @@ impl Vcpu {
         Ok(())
     }
 
-    pub fn enable_single_step(&self) -> Result<()> {
+    pub fn enable_single_step(&mut self) -> Result<()> {
         let dbg = kvm_guest_debug {
             control: KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_SINGLESTEP,
             pad: 0,
@@ -139,6 +159,11 @@ impl Vcpu {
         self.inner
             .set_guest_debug(&dbg)
             .map_err(|e| Error::SetGuestDebug(e))?;
+
+        self.regs.mutate(|regs| {
+            regs.rflags |= 0x100;
+            true
+        });
 
         Ok(())
     }

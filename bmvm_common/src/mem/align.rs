@@ -1,3 +1,6 @@
+use core::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
+use std::marker::PhantomData;
+
 /// This is a quick const wrapper for the DefaultAlign::align_floor function
 pub const fn align_floor(addr: u64) -> u64 {
     x86_64::align_down(addr, DefaultAlign::ALIGNMENT)
@@ -65,4 +68,76 @@ impl Align for Page2MiB {
 pub struct Page1GiB;
 impl Align for Page1GiB {
     const ALIGNMENT: u64 = Page2MiB::ALIGNMENT * 512;
+}
+
+/// Aligned non-zero integer wrapper
+#[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct AlignedNonZero<I, A: Align = DefaultAlign> {
+    inner: I,
+    _alignment: PhantomData<A>,
+}
+
+/// Macro to implementation for selected NonZero integer types and creation of type aliases
+macro_rules! impl_aligned_non_zero {
+    ($($int:ty => $nonzero:ty => $aligned_name:ident),* $(,)?) => {
+        $(
+        /// Aligned non-zero type for $int
+        pub type $aligned_name<A: Align = DefaultAlign> = AlignedNonZero<$nonzero, A>;
+
+        impl<A: Align> AlignedNonZero<$nonzero, A> {
+            /// Creates a new aligned value with floor alignment
+            pub fn new_floor(value: $int) -> Option<Self> {
+                let aligned = A::align_floor(value as u64) as $int;
+                <$nonzero>::new(aligned as $int).map(|inner| Self {
+                    inner,
+                    _alignment: PhantomData,
+                })
+            }
+
+            /// Creates a new aligned value with ceiling alignment
+            pub fn new_ceil(value: $int) -> Option<Self> {
+                let aligned = A::align_ceil(value as u64) as $int;
+                <$nonzero>::new(aligned as $int).map(|inner| Self {
+                    inner,
+                    _alignment: PhantomData,
+                })
+            }
+
+            /// Creates from already aligned non-zero value
+            pub fn new_aligned(value: $nonzero) -> Option<Self> {
+                if A::is_aligned(value.get() as u64) {
+                    Some(Self {
+                        inner: value,
+                        _alignment: PhantomData,
+                    })
+                } else {
+                    None
+                }
+            }
+
+            /// Returns the inner value
+            pub fn get(&self) -> $int {
+                self.inner.get()
+            }
+
+            /// Returns the raw NonZero value
+            pub fn get_non_zero(self) -> $nonzero {
+                self.inner
+            }
+        }
+
+        impl<A: Align> From<AlignedNonZero<$nonzero, A>> for $int {
+            fn from(value: AlignedNonZero<$nonzero, A>) -> $int {
+                value.get()
+            }
+        }
+        )*
+    };
+}
+
+impl_aligned_non_zero! {
+    u32 => NonZeroU32 => AlignedNonZeroU32,
+    u64 => NonZeroU64 => AlignedNonZeroU64,
+    usize => NonZeroUsize => AlignedNonZeroUsize,
 }
