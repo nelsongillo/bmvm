@@ -55,11 +55,11 @@ impl Default for Config {
 
 pub struct Vm {
     cfg: Config,
-    kvm: Kvm,
-    vm: VmFd,
-    vcpu: Vcpu,
-    manager: Allocator,
-    mem_mappings: Vec<Region<ReadWrite>>,
+    pub(super) kvm: Kvm,
+    pub(super) vm: VmFd,
+    pub(super) vcpu: Vcpu,
+    pub(super) manager: Allocator,
+    pub(super) mem_mappings: Vec<Region<ReadWrite>>,
 }
 
 impl Vm {
@@ -253,8 +253,9 @@ impl Vm {
         let mem = self.get_memory_at(rip, 8)?;
         // println!("DEBUG: memory at {:x} -> {:x?}", rip, mem.as_slice());
 
-        self.dump_region_to_file(cr3)?;
-        self.dump_region_to_file(rsp)?;
+        for r in self.mem_mappings.iter() {
+            self.dump_region_to_file(r.guest_addr().unwrap().as_u64())?;
+        }
 
         Ok(())
     }

@@ -72,8 +72,18 @@ impl Vcpu {
         self.regs.set(regs);
     }
 
-    pub fn set_sregs(&mut self, sregs: kvm_sregs) {
-        self.sregs.set(sregs);
+    pub fn mutate_regs<M>(&mut self, m: M)
+    where
+        M: FnOnce(&mut kvm_regs) -> bool,
+    {
+        self.regs.mutate(m);
+    }
+
+    pub fn mutate_sregs<M>(&mut self, m: M)
+    where
+        M: FnOnce(&mut kvm_sregs) -> bool,
+    {
+        self.sregs.mutate(m);
     }
 
     pub fn get_regs(&mut self) -> Result<&kvm_regs> {
@@ -112,11 +122,14 @@ impl Vcpu {
             // Point to code selector
             sregs.cs.selector = 0x08;
             sregs.cs.base = 0;
+            sregs.cs.limit = 0xFFFFF;
             sregs.cs.l = 1;
+            sregs.cs.dpl = 0x0;
 
             // Point to data selector
             sregs.ds.selector = 0x10;
             sregs.ds.base = 0;
+            // sregs.ds.limit = 0xFFFFF;
             sregs.ds.l = 1;
 
             // set IDT (Guest will use LIDT later to update the IDT localtion)

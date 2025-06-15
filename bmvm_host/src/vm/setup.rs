@@ -40,8 +40,8 @@ pub(crate) fn idt() -> Vec<u8> {
 pub(crate) fn gdt() -> Vec<u8> {
     let mut gdt = Vec::new();
     gdt.extend_from_slice(&gdt_entry(0, 0, 0, 0));
-    gdt.extend_from_slice(&gdt_entry(0, 0xFFFFF, 0x9A, 0xA));
-    gdt.extend_from_slice(&gdt_entry(0, 0xFFFFF, 0x92, 0xC));
+    gdt.extend_from_slice(&gdt_entry(0, 0xFFFFF, 0x9E, 0b1010));
+    gdt.extend_from_slice(&gdt_entry(0, 0xFFFFF, 0x92, 0b1010));
     gdt
 }
 
@@ -236,16 +236,14 @@ pub(crate) fn estimate_page_count(regions: &Vec<LayoutTableEntry>) -> (usize, us
 /// Constructs a new GDT entry
 #[inline]
 const fn gdt_entry(base: u64, limit: u64, access_byte: u8, flags: u8) -> [u8; 8] {
-    [
-        (limit & 0xFF) as u8,
-        ((limit >> 8) & 0xFF) as u8,
-        (base & 0xFF) as u8,
-        ((base >> 8) & 0xFF) as u8,
-        ((base >> 16) & 0xFF) as u8,
-        access_byte,
-        ((limit >> 16) & 0x0F) as u8 | (flags << 4),
-        (base >> 24) as u8,
-    ]
+    let mut value: u64 = 0;
+    value |= limit & 0xFFFF;
+    value |= (base & 0xFF_FFFF) << 16;
+    value |= (access_byte as u64) << 40;
+    value |= (limit & 0xF_0000) << 48;
+    value |= (flags as u64) << 52;
+    value |= (base & 0xFF00_0000) << 56;
+    value.to_ne_bytes()
 }
 
 /// create a new paging entry

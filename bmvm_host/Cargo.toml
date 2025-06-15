@@ -10,6 +10,8 @@ kvm-ioctls = "0.22.0"
 kvm-bindings = "0.12.0"
 sealed = "0.6.0"
 thiserror = "2.0.12"
+gdbstub = "0.7.6"
+gdbstub_arch = "0.3.2"
 
 bmvm-common = {path = "../bmvm_common", features = ["std"]}
 bmvm-macros = {path = "../bmvm_macros"}
