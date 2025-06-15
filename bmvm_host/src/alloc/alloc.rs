@@ -76,22 +76,21 @@ enum StorageBackend {
     GuestMem(RawFd),
 }
 
-/// This represents a memory region on host, which can be mapped into the physical memory
-/// of the guest.
-pub struct Region<P: Perm, A: Align = DefaultAlign> {
-    physical_addr: Option<PhysAddr>,
+/// This represents a memory region on host, where no guest physical address is set, therefore it
+/// can not be mapped into the host. To get a mappable region, set the guest address via `set_guest_addr`.
+pub struct ProtoRegion<P: Perm, A: Align = DefaultAlign> {
     capacity: usize,
     storage: StorageBackend,
     _perm: std::marker::PhantomData<P>,
     _align: std::marker::PhantomData<A>,
 }
 
-impl<P: Perm, A: Align> Region<P, A> {
-    /// Set the guest address of the region.
-    /// This is used to set the guest address of the region when it is mapped.
-    /// This is not used for the initial allocation of the region.
+impl<P: Perm, A: Align> ProtoRegion<P, A> {
+    /// Set the guest address of the region, converting the ProtoRegion into a fully functional
+    /// region, which can be mapped into the guest.
+    /// The address is used to set the guest address of the region when it is mapped.
     /// Panics, if the provided address is not aligned.
-    pub fn set_guest_addr(&mut self, addr: PhysAddr) {
+    pub fn set_guest_addr(self, addr: PhysAddr) -> Region<P, A> {
         if !A::is_aligned(addr.as_u64()) {
             panic!(
                 "address {:#x} is not properly aligned for {:#x}",
@@ -99,12 +98,30 @@ impl<P: Perm, A: Align> Region<P, A> {
                 A::ALIGNMENT
             );
         }
-        self.physical_addr = Some(addr);
+        Region {
+            addr,
+            capacity: self.capacity,
+            storage: self.storage,
+            _perm: std::marker::PhantomData,
+            _align: std::marker::PhantomData,
+        }
     }
+}
 
+/// This represents a memory region on host, which can be mapped into the physical memory
+/// of the guest.
+pub struct Region<P: Perm, A: Align = DefaultAlign> {
+    addr: PhysAddr,
+    capacity: usize,
+    storage: StorageBackend,
+    _perm: std::marker::PhantomData<P>,
+    _align: std::marker::PhantomData<A>,
+}
+
+impl<P: Perm, A: Align> Region<P, A> {
     /// Get the guest physical address, where the region is mapped to
-    pub fn guest_addr(&self) -> Option<PhysAddr> {
-        self.physical_addr
+    pub fn guest_addr(&self) -> PhysAddr {
+        self.addr
     }
 
     /// Get the region size. This will always be a multiple of Align
@@ -164,18 +181,15 @@ impl Into<RegionEntry> for Region<GuestOnly> {
 }
 
 */
-macro_rules! impl_as_ref_for_region {
-    ($($struct:ty),* $(,)?) => {
+macro_rules! impl_as_ref {
+    ($target:ident => $($struct:ty),* $(,)?) => {
         $(
-            impl<A: Align> AsRef<[u8]> for Region<$struct, A> {
+            impl<A: Align> AsRef<[u8]> for $target<$struct, A> {
                 fn as_ref(&self) -> &[u8] {
                     match self.storage {
                         StorageBackend::GuestMem(_) => {
                             panic!("deref_mut on guest memory");
                         },
-                        StorageBackend::Mmap(ptr) if ptr.as_ptr().is_null() => {
-                            panic!("deref_mut on null pointer");
-                        }
                         StorageBackend::Mmap(ptr) => {
                             unsafe { slice::from_raw_parts(ptr.as_ptr(), self.capacity) }
                         }
@@ -186,10 +200,10 @@ macro_rules! impl_as_ref_for_region {
     };
 }
 
-macro_rules! impl_read_for_region {
-    ($($struct:ty),* $(,)?) => {
+macro_rules! impl_read_offset {
+    ($target:ident => $($struct:ty),* $(,)?) => {
         $(
-            impl<A: Align> Region<$struct, A> {
+            impl<A: Align> $target<$struct, A> {
                 /// `read_offset` is like read, but tries to read from a given offset in the page.
                 /// An offset of 0 indicates the beginning of the page
                 pub fn read_offset(&self, offset: usize, buf: &mut [u8]) -> Result<usize, Error> {
@@ -207,24 +221,27 @@ macro_rules! impl_read_for_region {
                     buf.copy_from_slice(&self.as_ref()[offset..(offset + to_copy)]);
                     Ok(to_copy)
                 }
+            }
+        )*
+    };
+}
 
+macro_rules! impl_read_addr {
+    ($target:ident => $($struct:ty),* $(,)?) => {
+        $(
+            impl<A: Align> $target<$struct, A> {
                 /// `read_abs` is like `read`, but tries to start reading based on the absolute address.
                 /// If the provided address is not included in the region address space, an Error will be returned.
                 fn read_addr(&self, addr: u64, buf: &mut [u8]) -> Result<usize, Error> {
-                    if self.physical_addr.is_none() {
-                        return Err(Error::GuestAddressNotSet);
+                    if self.addr.as_u64() < addr {
+                        return Err(Error::InvalidAddress{ addr: addr, start: self.addr, size: self.capacity });
                     }
 
-                    let guest = self.physical_addr.unwrap();
-                    if guest.as_u64() < addr {
-                        return Err(Error::InvalidAddress{ addr: addr, start: guest, size: self.capacity });
+                    if self.addr.as_u64() + (self.capacity as u64) < addr {
+                        return Err(Error::InvalidAddress{ addr: addr, start: self.addr, size: self.capacity });
                     }
 
-                    if guest.as_u64() + (self.capacity as u64) < addr {
-                        return Err(Error::InvalidAddress{ addr: addr, start: guest, size: self.capacity });
-                    }
-
-                    let offset = (addr - guest.as_u64()) as usize;
+                    let offset = (addr - self.addr.as_u64()) as usize;
                     self.read_offset(offset, buf)
                 }
             }
@@ -232,21 +249,22 @@ macro_rules! impl_read_for_region {
     };
 }
 
-impl_as_ref_for_region!(ReadOnly, WriteOnly, ReadWrite);
-impl_read_for_region!(ReadOnly, ReadWrite);
+impl_as_ref!(ProtoRegion => ReadOnly, WriteOnly, ReadWrite);
+impl_read_offset!(ProtoRegion => ReadOnly, ReadWrite);
 
-macro_rules! impl_as_mut_for_region {
-    ($($struct:ty),* $(,)?) => {
+impl_as_ref!(Region => ReadOnly, WriteOnly, ReadWrite);
+impl_read_offset!(Region => ReadOnly, ReadWrite);
+impl_read_addr!(Region => ReadOnly, ReadWrite);
+
+macro_rules! impl_as_mut {
+    ($target:ident => $($struct:ty),* $(,)?) => {
         $(
-            impl<A: Align> AsMut<[u8]> for Region<$struct, A> {
+            impl<A: Align> AsMut<[u8]> for $target<$struct, A> {
                 fn as_mut(&mut self) -> &mut [u8] {
                     match self.storage {
                         StorageBackend::GuestMem(_) => {
                             panic!("deref_mut on guest memory");
                         },
-                        StorageBackend::Mmap(ptr) if ptr.as_ptr().is_null() => {
-                            panic!("deref_mut on null pointer");
-                        }
                         StorageBackend::Mmap(mut ptr) => {
                             unsafe { slice::from_raw_parts_mut(ptr.as_mut(), self.capacity) }
                         }
@@ -257,10 +275,10 @@ macro_rules! impl_as_mut_for_region {
     };
 }
 
-macro_rules! impl_write_for_region {
-    ($($struct:ty),* $(,)?) => {
+macro_rules! impl_write_offset {
+    ($target:ident => $($struct:ty),* $(,)?) => {
         $(
-            impl<A: Align> Region<$struct, A> {
+            impl<A: Align> $target<$struct, A> {
                 /// `write_offset` is like `write`, but tries to start writing at the given offset in the page.
                 /// An offset of 0 indicates the beginning of the page.
                 pub fn write_offset(&mut self, offset: usize, buf: &[u8]) -> Result<usize, Error> {
@@ -281,32 +299,35 @@ macro_rules! impl_write_for_region {
                     self.as_mut()[offset..(offset + data.len())].copy_from_slice(data);
                     Ok(fit)
                 }
+            }
+        )*
+    };
+}
 
+macro_rules! impl_write_addr {
+    ($target:ident => $($struct:ty),* $(,)?) => {
+        $(
+            impl<A: Align> $target<$struct, A> {
                 /// `write_abs` is like `write`, but tries to start writing based on the absolute address.
                 /// If the provided address is not included in the region address space, an Error will be returned.
                 fn write_addr(&mut self, addr: u64, buf: &[u8]) -> Result<usize, Error> {
-                    if self.physical_addr.is_none() {
-                        return Err(Error::GuestAddressNotSet);
-                    }
-
-                    let guest = self.physical_addr.unwrap();
-                    if guest.as_u64() < addr {
+                    if self.addr.as_u64() < addr {
                         return Err(Error::InvalidAddress{
                             addr: addr,
-                            start: guest,
+                            start: self.addr,
                             size: self.capacity
                         });
                     }
 
-                    if guest.as_u64() + (self.capacity as u64) < addr {
+                    if self.addr.as_u64() + (self.capacity as u64) < addr {
                         return Err(Error::InvalidAddress{
                             addr: addr,
-                            start: guest,
+                            start: self.addr,
                             size: self.capacity
                         });
                     }
 
-                    let offset = (addr - guest.as_u64()) as usize;
+                    let offset = (addr - self.addr.as_u64()) as usize;
                     self.write_offset(offset, buf)
                 }
             }
@@ -314,8 +335,12 @@ macro_rules! impl_write_for_region {
     };
 }
 
-impl_as_mut_for_region!(WriteOnly, ReadWrite);
-impl_write_for_region!(WriteOnly, ReadWrite);
+impl_as_mut!(ProtoRegion => WriteOnly, ReadWrite);
+impl_write_offset!(ProtoRegion => WriteOnly, ReadWrite);
+
+impl_as_mut!(Region => WriteOnly, ReadWrite);
+impl_write_offset!(Region => WriteOnly, ReadWrite);
+impl_write_addr!(Region => WriteOnly, ReadWrite);
 
 pub struct Allocator {
     m_flags: MapFlags,
@@ -336,11 +361,14 @@ impl Allocator {
         &self,
         capacity: AlignedNonZeroUsize,
         vm: &VmFd,
-    ) -> Result<Region<P, DefaultAlign>, Error> {
+    ) -> Result<ProtoRegion<P, DefaultAlign>, Error> {
         self.allocate::<P>(capacity, vm)
     }
 
-    pub fn alloc_accessible<P>(&self, capacity: AlignedNonZeroUsize) -> Result<Region<P>, Error>
+    pub fn alloc_accessible<P>(
+        &self,
+        capacity: AlignedNonZeroUsize,
+    ) -> Result<ProtoRegion<P>, Error>
     where
         P: Perm + Accessible,
     {
@@ -351,7 +379,7 @@ impl Allocator {
         &self,
         capacity: AlignedNonZeroUsize,
         vm: &VmFd,
-    ) -> Result<Region<P>, Error> {
+    ) -> Result<ProtoRegion<P>, Error> {
         let flags = P::prot_flags();
         if flags.contains(ProtFlags::PROT_NONE) {
             self.guest_memfd(capacity, vm)
@@ -360,7 +388,7 @@ impl Allocator {
         }
     }
 
-    fn mmap<P>(&self, capacity: AlignedNonZeroUsize) -> Result<Region<P>, Error>
+    fn mmap<P>(&self, capacity: AlignedNonZeroUsize) -> Result<ProtoRegion<P>, Error>
     where
         P: Perm,
     {
@@ -368,8 +396,7 @@ impl Allocator {
         // mmap a region with the required size and flags
         let mem = unsafe { mmap_anonymous(None, capacity.get_non_zero(), flags, self.m_flags) }?;
 
-        let region = Region {
-            physical_addr: None,
+        let region = ProtoRegion {
             capacity: capacity.get(),
             storage: StorageBackend::Mmap(mem.cast::<u8>()),
             _perm: std::marker::PhantomData,
@@ -386,7 +413,7 @@ impl Allocator {
         &self,
         capacity: AlignedNonZeroUsize,
         vm: &VmFd,
-    ) -> Result<Region<P>, Error> {
+    ) -> Result<ProtoRegion<P>, Error> {
         let gmem = kvm_create_guest_memfd {
             size: capacity.get() as u64,
             flags: 0,

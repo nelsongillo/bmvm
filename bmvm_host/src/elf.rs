@@ -124,12 +124,12 @@ impl ExecBundle {
 
             // allocate + copy file content to region
             let req_capacity = AlignedNonZeroUsize::new_ceil(to_alloc as usize).unwrap();
-            let mut mem = manager.alloc_accessible::<ReadWrite>(req_capacity)?;
+            let mut proto_mem = manager.alloc_accessible::<ReadWrite>(req_capacity)?;
             let to_cpy =
                 &buf.as_ref()[ph.p_offset as usize..(ph.p_offset as usize + ph.p_filesz as usize)];
             let region_offset = ph.p_vaddr - p_start;
-            mem.write_offset(region_offset as usize, to_cpy)?;
-            mem.set_guest_addr(PhysAddr::new(p_start));
+            proto_mem.write_offset(region_offset as usize, to_cpy)?;
+            let mem = proto_mem.set_guest_addr(PhysAddr::new(p_start));
             mem_regions.push(mem);
         }
 

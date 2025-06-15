@@ -122,7 +122,7 @@ impl Vm {
                 let mapping = kvm_userspace_memory_region {
                     slot: slot as u32,
                     flags: 0,
-                    guest_phys_addr: r.guest_addr().unwrap().as_u64(),
+                    guest_phys_addr: r.guest_addr().as_u64(),
                     memory_size: r.capacity() as u64,
                     userspace_addr: r.as_ptr() as u64,
                 };
@@ -180,14 +180,14 @@ impl Vm {
         capacity: AlignedNonZeroUsize,
         base: PhysAddr,
     ) -> Result<(Region<ReadWrite>, LayoutTableEntry)> {
-        let mut region = self
+        let proto = self
             .manager
             .alloc_accessible::<ReadWrite>(capacity)
             .map_err(|e| Error::Allocator(e))?;
 
         // stack grows downwards -> mount address is at the top of the stack
         let guest_addr = align_floor((base - capacity.get() as u64).as_u64());
-        region.set_guest_addr(PhysAddr::new(guest_addr));
+        let region = proto.set_guest_addr(PhysAddr::new(guest_addr));
 
         let size = (capacity.get() as u64 / DefaultAlign::ALIGNMENT) as u32;
         let entry = LayoutTableEntry::new(base, size, Flags::PRESENT | Flags::WRITE);
@@ -200,8 +200,10 @@ impl Vm {
     fn setup_long_mode_env(&mut self, exec: &ExecBundle) -> Result<Region<ReadWrite>> {
         // allocate a region for the temporary system structures
         let size_tmp_sys = AlignedNonZeroUsize::new_ceil(GUEST_TMP_SYSTEM_SIZE as usize).unwrap();
-        let mut temp_sys_region = self.manager.alloc_accessible::<ReadWrite>(size_tmp_sys)?;
-        temp_sys_region.set_guest_addr(BMVM_TMP_SYS);
+        let mut temp_sys_region = self
+            .manager
+            .alloc_accessible::<ReadWrite>(size_tmp_sys)?
+            .set_guest_addr(BMVM_TMP_SYS);
 
         // estimate the system region
         let mut layout = exec.layout.clone();
@@ -263,7 +265,7 @@ impl Vm {
     fn get_memory_at(&self, addr: u64, length: u64) -> Result<Vec<u8>> {
         let end = addr + length - 1;
         for r in self.mem_mappings.iter() {
-            let guest_addr = r.guest_addr().unwrap().as_u64();
+            let guest_addr = r.guest_addr().as_u64();
             let size = r.capacity();
             if (guest_addr..(guest_addr + size as u64)).contains(&addr) {
                 if end >= guest_addr + size as u64 {
@@ -281,7 +283,7 @@ impl Vm {
 
     fn dump_region_to_file(&self, addr: u64) -> Result<()> {
         for r in self.mem_mappings.iter() {
-            let guest_addr = r.guest_addr().unwrap().as_u64();
+            let guest_addr = r.guest_addr().as_u64();
             let size = r.capacity();
             if (guest_addr..(guest_addr + size as u64)).contains(&addr) {
                 let mut file = std::fs::File::create(format!("dump_{:#x}.bin", addr)).unwrap();
