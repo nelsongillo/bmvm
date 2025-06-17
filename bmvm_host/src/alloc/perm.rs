@@ -1,38 +1,68 @@
 #![allow(unused)]
 
+use nix::sys::mman::ProtFlags;
+use sealed::sealed;
+
 /// Perm represents a generic permission
-pub trait Perm {}
+#[sealed]
+pub trait Perm {
+    fn prot_flags() -> ProtFlags;
+}
 
-/// Writeable represents a write permission
-pub trait Writable: Perm {}
-
-/// Readable represents a read permission
-pub trait Readable: Perm {}
-
-/// Anon represents no granted permission
-pub trait Anon: Perm {}
+#[sealed]
+pub trait Accessible {}
 
 /// ReadOnly implements the Readable trait. This should be used as the generic.
 pub struct ReadOnly;
 
-impl Perm for ReadOnly {}
+#[sealed]
+impl Perm for ReadOnly {
+    #[inline]
+    fn prot_flags() -> ProtFlags {
+        ProtFlags::PROT_READ
+    }
+}
 
-impl Readable for ReadOnly {}
+#[sealed]
+impl Accessible for ReadOnly {}
+
 /// WriteOnly implements the Writeable trait. This should be used as the generic.
 pub struct WriteOnly;
-impl Perm for WriteOnly {}
 
-impl Writable for WriteOnly {}
+#[sealed]
+impl Perm for WriteOnly {
+    #[inline]
+    fn prot_flags() -> ProtFlags {
+        ProtFlags::PROT_WRITE
+    }
+}
+
+#[sealed]
+impl Accessible for WriteOnly {}
+
 /// ReadWrite implements the Writeable, as well as the Readable trait. This should be used as the generic.
 pub struct ReadWrite;
-impl Perm for ReadWrite {}
 
-impl Readable for ReadWrite {}
-impl Writable for ReadWrite {}
+#[sealed]
+impl Perm for ReadWrite {
+    #[inline]
+    fn prot_flags() -> ProtFlags {
+        ProtFlags::PROT_WRITE | ProtFlags::PROT_READ
+    }
+}
+
+#[sealed]
+impl Accessible for ReadWrite {}
 
 /// GuestOnly implements Anon trait, indication neither a read nor a write permission is granted.
+/// We try to create a guest-only region via the `KVM_CREATE_GUEST_MEMFD` ioctl. If the capability
+/// is not available, the fallback ReadWrite will be used.
 pub struct GuestOnly;
 
-impl Perm for GuestOnly {}
-
-impl Anon for GuestOnly {}
+#[sealed]
+impl Perm for GuestOnly {
+    #[inline]
+    fn prot_flags() -> ProtFlags {
+        ProtFlags::PROT_NONE
+    }
+}

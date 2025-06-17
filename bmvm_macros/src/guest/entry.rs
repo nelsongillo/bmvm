@@ -20,7 +20,7 @@ pub fn entry_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
         #func
 
         #[unsafe(no_mangle)]
-        pub extern "C" fn __process_entry() {
+        pub fn __process_entry() {
             #func_name();
         }
     };

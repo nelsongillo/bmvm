@@ -4,6 +4,8 @@ members = [
     "bmvm_guest",
     "bmvm_common",
     "bmvm_host",
-    "kvm_guest_sample",
-    "bmvm_macros"
+    "examples/guest",
+    "bmvm_macros",
+    "examples/host",
+    "examples/longmode",
 ]

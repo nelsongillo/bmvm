@@ -1,6 +1,5 @@
-pub mod perm;
 pub mod alloc;
+pub mod perm;
 
-
-pub use perm::*;
 pub use alloc::*;
+pub use perm::*;

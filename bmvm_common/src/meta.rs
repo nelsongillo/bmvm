@@ -1,8 +1,7 @@
-use crate::hash::Djb2;
+use crate::hash::{Djb2, Djb232};
 use anyhow::anyhow;
+use core::ops::Not;
 use std::ffi::CString;
-use std::ops::Not;
-use syn::{Type, TypePath, TypeReference, TypeSlice};
 
 pub const STATIC_META_NAME_PREFIX: &str = "BMVM_CALL_HOST_META_";
 pub const LINK_SECTION_META_NAME: &str = ".bmvm.call.host";
@@ -43,59 +42,12 @@ impl TryFrom<u8> for DataType {
     }
 }
 
-impl TryFrom<Type> for DataType {
-    type Error = &'static str;
-
-    fn try_from(ty: Type) -> Result<Self, Self::Error> {
-        match ty {
-            // Match simple types like u32, i8, etc.
-            Type::Path(TypePath { path, .. }) => {
-                if let Some(ident) = path.get_ident() {
-                    match ident.to_string().as_str() {
-                        "u8" => Ok(DataType::UInt8),
-                        "u16" => Ok(DataType::UInt16),
-                        "u32" => Ok(DataType::UInt32),
-                        "u64" => Ok(DataType::UInt64),
-                        "i8" => Ok(DataType::Int8),
-                        "i16" => Ok(DataType::Int16),
-                        "i32" => Ok(DataType::Int32),
-                        "i64" => Ok(DataType::Int64),
-                        "f32" => Ok(DataType::Float32),
-                        "f64" => Ok(DataType::Float64),
-                        _ => Err("Unsupported type"),
-                    }
-                } else {
-                    Err("Unsupported type")
-                }
-            }
-
-            // Match references: &T or &mut T
-            Type::Reference(TypeReference { elem, .. }) => match *elem {
-                // Match &[u8]
-                Type::Slice(TypeSlice { elem, .. }) => {
-                    if let Type::Path(TypePath { path, .. }) = *elem {
-                        if let Some(ident) = path.get_ident() {
-                            if ident == "u8" {
-                                return Ok(DataType::Bytes);
-                            }
-                        }
-                    }
-                    Err("Unsupported type")
-                }
-                _ => Err("Unsupported type"),
-            },
-            _ => Err("Unsupported type"),
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct CallMeta {
     id: u32,
     argv: Vec<DataType>,
     fn_name: CString,
 }
-
 impl CallMeta {
     const MIN_SIZE: usize = {
         // u32 ID
@@ -108,10 +60,10 @@ impl CallMeta {
 
     pub fn new(argv: Vec<DataType>, fn_name: &str) -> anyhow::Result<Self> {
         if argv.len() > u8::MAX as usize {
-            Err(anyhow!("argv must not be longer than u8::MAX"))?
+            return Err(anyhow!("argv must not be longer than u8::MAX"));
         }
 
-        let mut hasher = Djb2::new();
+        let mut hasher = Djb232::new();
         hasher.write(fn_name.as_bytes());
         hasher.write(
             argv.iter()
@@ -214,6 +166,17 @@ impl CallMeta {
         bytes.extend(self.fn_name.as_bytes_with_nul());
 
         bytes
+    }
+
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+
+    pub fn argv(&self) -> &Vec<DataType> {
+        &self.argv
+    }
+    pub fn fn_name(&self) -> &CString {
+        &self.fn_name
     }
 }
 
