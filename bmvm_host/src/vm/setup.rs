@@ -11,6 +11,8 @@ use std::collections::HashSet;
 const PAGE_TABLE_SIZE: u64 = 0x1000;
 pub(super) const IDT_SIZE: u64 = 0x1000;
 pub(super) const GDT_SIZE: u64 = 0x1000;
+pub(super) const GDT_ENTRY_SIZE: usize = 8;
+pub(super) const IDT_ENTRY_SIZE: usize = 8;
 const IDT_PAGE_REQUIRED: usize = (align_ceil(IDT_SIZE) / DefaultAlign::ALIGNMENT) as usize;
 const GDT_PAGE_REQUIRED: usize = (align_ceil(GDT_SIZE) / DefaultAlign::ALIGNMENT) as usize;
 
@@ -20,7 +22,7 @@ const PAGE_FLAG_PRESENT: u64 = 1;
 const PAGE_FLAG_WRITE: u64 = 1 << 1;
 const PAGE_FLAG_USER: u64 = 1 << 2;
 const PAGE_FLAG_HUGE: u64 = 1 << 7;
-const PAGE_FLAG_EXECUTABLE: u64 = 1 << 63;
+const PAGE_FLAG_NOT_EXECUTABLE: u64 = 1 << 63;
 
 type Result<T> = core::result::Result<T, Error>;
 
@@ -40,8 +42,8 @@ pub(crate) fn idt() -> Vec<u8> {
 pub(crate) fn gdt() -> Vec<u8> {
     let mut gdt = Vec::new();
     gdt.extend_from_slice(&gdt_entry(0, 0, 0, 0));
-    gdt.extend_from_slice(&gdt_entry(0, 0xFFFFF, 0x9A, 0xA));
-    gdt.extend_from_slice(&gdt_entry(0, 0xFFFFF, 0x92, 0xC));
+    gdt.extend_from_slice(&gdt_entry(0, 0xFFFF, 0x9A, 0xA));
+    gdt.extend_from_slice(&gdt_entry(0, 0xFFFF, 0x92, 0xC));
     gdt
 }
 
@@ -235,7 +237,7 @@ pub(crate) fn estimate_page_count(regions: &Vec<LayoutTableEntry>) -> (usize, us
 
 /// Constructs a new GDT entry
 #[inline]
-const fn gdt_entry(base: u64, limit: u64, access_byte: u8, flags: u8) -> [u8; 8] {
+const fn gdt_entry(base: u64, limit: u64, access_byte: u8, flags: u8) -> [u8; GDT_ENTRY_SIZE] {
     [
         (limit & 0xFF) as u8,
         ((limit >> 8) & 0xFF) as u8,
@@ -259,7 +261,7 @@ fn paging_entry(addr: VirtAddr, huge: bool, exec: bool) -> [u8; 8] {
     }
 
     if !exec {
-        value |= PAGE_FLAG_EXECUTABLE;
+        value |= PAGE_FLAG_NOT_EXECUTABLE;
     }
 
     value.to_ne_bytes()

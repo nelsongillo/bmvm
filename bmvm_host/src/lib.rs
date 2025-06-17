@@ -5,7 +5,7 @@ mod runtime;
 mod utils;
 mod vm;
 
-use bmvm_common::mem::{AddrSpace, Align, DefaultAddrSpace, align_floor};
+use bmvm_common::mem::{AddrSpace, DefaultAddrSpace, align_floor};
 pub use bmvm_common::mem::{PhysAddr, align_ceil};
 pub use bmvm_common::meta;
 pub use bmvm_common::registry;

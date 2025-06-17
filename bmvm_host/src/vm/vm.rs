@@ -4,13 +4,13 @@ use crate::vm::vcpu::Vcpu;
 use crate::vm::{setup, vcpu};
 use crate::{GUEST_DEFAULT_STACK_SIZE, GUEST_STACK_ADDR, GUEST_TMP_SYSTEM_SIZE};
 use bmvm_common::mem::{
-    Align, AlignedNonZeroUsize, DefaultAlign, Flags, LayoutTableEntry, Page4KiB, PhysAddr,
+    Align, AlignedNonZeroUsize, DefaultAlign, Flags, LayoutTableEntry, PhysAddr, VirtAddr,
     align_floor,
 };
 use bmvm_common::{
     BMVM_MEM_LAYOUT_TABLE, BMVM_TMP_GDT, BMVM_TMP_IDT, BMVM_TMP_PAGING, BMVM_TMP_SYS,
 };
-use kvm_bindings::{KVM_API_VERSION, kvm_userspace_memory_region};
+use kvm_bindings::{KVM_API_VERSION, KVM_MAX_CPUID_ENTRIES, kvm_userspace_memory_region};
 use kvm_ioctls::{Cap, Kvm, VcpuExit, VmFd};
 use std::io::Write;
 
@@ -63,6 +63,7 @@ pub struct Vm {
 }
 
 impl Vm {
+    /// create a new VM instance
     pub(crate) fn new<C: Into<Config>>(cfg: C) -> Result<Self> {
         let kvm = Kvm::new().map_err(|e| Error::Kvm(e))?;
         let version = kvm.get_api_version();
@@ -94,6 +95,7 @@ impl Vm {
         })
     }
 
+    /// load the guest executable
     pub(crate) fn load_exec(&mut self, exec: &mut ExecBundle) -> Result<()> {
         // allocate a stack region
         let (stack, stack_entry) = self.alloc_stack(self.cfg.stack_size, GUEST_STACK_ADDR())?;
@@ -107,14 +109,8 @@ impl Vm {
         // move all execution relevant regions to the vm
         self.mem_mappings.append(&mut exec.mem_regions);
 
-        // setup the CPU registers
-        self.vcpu.setup_registers(
-            BMVM_TMP_PAGING.as_virt_addr(),
-            BMVM_TMP_GDT.as_virt_addr(),
-            BMVM_TMP_IDT.as_virt_addr(),
-            GUEST_STACK_ADDR().as_virt_addr(),
-            exec.entry.as_virt_addr(),
-        )?;
+        // setup the vcpu for execution
+        self.setup_cpu(exec.entry.as_virt_addr())?;
 
         unsafe {
             // map all regions to the guest
@@ -138,30 +134,37 @@ impl Vm {
         Ok(())
     }
 
+    /// run the guest
     pub(crate) fn run(&mut self) -> Result<()> {
+        log::info!("Starting VM");
+        log::debug!("stack: {:x}", GUEST_STACK_ADDR().as_virt_addr().as_u64());
+
         loop {
             match self.vcpu.run()? {
                 VcpuExit::IoOut(port, data) => {
-                    println!(
+                    log::info!(
                         "IO write on port {:#x} with data {:#x} -> {}",
-                        port, data[0], data[0] as char
+                        port,
+                        data[0],
+                        data[0] as char
                     )
                 }
                 VcpuExit::IoIn(port, data) => {
-                    println!("IO read on port {:#x} with data {:#x}", port, data[0])
+                    log::info!("IO read on port {:#x} with data {:#x}", port, data[0])
                 }
                 VcpuExit::Hlt => {
-                    println!("Halt called -> shutdown vm");
+                    log::info!("Halt called -> shutdown vm");
                     break;
                 }
                 VcpuExit::Debug(_) => {
-                    println!("Debug called");
+                    log::debug!("Debug called");
                     self.print_debug_info()?;
-                    println!("\n\n\n");
+                    self.vcpu.enable_single_step()?
                 }
                 reason => {
-                    println!("Unexpected exit reason: {:?}", reason);
+                    log::error!("Unexpected exit reason: {:?}", reason);
                     self.print_debug_info()?;
+                    self.dump_region_to_file(0x0)?;
                     break;
                 }
             }
@@ -187,10 +190,15 @@ impl Vm {
 
         // stack grows downwards -> mount address is at the top of the stack
         let guest_addr = align_floor((base - capacity.get() as u64).as_u64());
+        log::debug!("stack mapping addr: {:x}", guest_addr);
         region.set_guest_addr(PhysAddr::new(guest_addr));
 
         let size = (capacity.get() as u64 / DefaultAlign::ALIGNMENT) as u32;
-        let entry = LayoutTableEntry::new(base, size, Flags::PRESENT | Flags::WRITE);
+        let entry = LayoutTableEntry::new(
+            PhysAddr::new(guest_addr),
+            size,
+            Flags::PRESENT | Flags::WRITE,
+        );
 
         Ok((region, entry))
     }
@@ -229,54 +237,49 @@ impl Vm {
         Ok(temp_sys_region)
     }
 
+    /// Setting up the Vcpu with pointers to all necessary structures (Paging, IDT, GDT, etc)
+    fn setup_cpu(&mut self, entry_point: VirtAddr) -> Result<()> {
+        // setup vcpu cpuid
+        let supported_cpuid_funcs = self
+            .kvm
+            .get_supported_cpuid(KVM_MAX_CPUID_ENTRIES)
+            .map_err(|e| Error::Kvm(e))?;
+
+        let setup = vcpu::Setup {
+            gdt: vcpu::Gdt {
+                addr: BMVM_TMP_GDT.as_virt_addr(),
+                entries: 3,
+                code: 1,
+                data: 2,
+            },
+            idt: vcpu::Idt {
+                addr: BMVM_TMP_IDT.as_virt_addr(),
+                entries: 0,
+            },
+            paging: BMVM_TMP_PAGING.as_virt_addr(),
+            stack: GUEST_STACK_ADDR().as_virt_addr(),
+            entry: entry_point,
+            cpu_id: supported_cpuid_funcs,
+        };
+
+        self.vcpu.setup(&setup).map_err(|e| Error::Vcpu(e))
+    }
+
     fn print_debug_info(&mut self) -> Result<()> {
         let (regs, sregs) = self.vcpu.get_all_regs()?;
         // Store the relevant register values to avoid holding the mutable borrow
-        let rip = regs.rip;
         let cr2 = sregs.cr2;
-        let rsp = regs.rsp;
-        let cr3 = sregs.cr3;
 
         // Print registers before getting memory to avoid borrow conflict
-        println!("DEBUG: registers -> {:?}", regs);
-        println!("DEBUG: special registers -> {:?}", sregs);
+        log::debug!("registers -> {:?}", regs);
+        log::debug!("special registers -> {:?}", sregs);
 
         if cr2 != 0 {
-            println!("PAGE FAULT at: cr2 -> {:#x}", cr2);
-            // let mem = self.get_memory_at(align_floor(cr2), Page4KiB::ALIGNMENT)?;
-            // println!("DEBUG: memory at {:x} -> {:x?}", cr2, mem.as_slice());
-
-            let stack = self.get_memory_at(align_floor(rsp - 1), Page4KiB::ALIGNMENT)?;
-            // println!("DEBUG: memory at {:x} -> {:x?}", rsp, stack.as_slice());
+            log::info!("PAGE FAULT at: cr2 -> {:#x}", cr2);
+            self.dump_region_to_file(cr2)?;
         }
-
-        let mem = self.get_memory_at(rip, 8)?;
-        // println!("DEBUG: memory at {:x} -> {:x?}", rip, mem.as_slice());
-
-        self.dump_region_to_file(cr3)?;
-        self.dump_region_to_file(rsp)?;
 
         Ok(())
-    }
-
-    /// Try reading the guest memory
-    fn get_memory_at(&self, addr: u64, length: u64) -> Result<Vec<u8>> {
-        let end = addr + length - 1;
-        for r in self.mem_mappings.iter() {
-            let guest_addr = r.guest_addr().unwrap().as_u64();
-            let size = r.capacity();
-            if (guest_addr..(guest_addr + size as u64)).contains(&addr) {
-                if end >= guest_addr + size as u64 {
-                    return Err(Error::VmMemoryRequestExceedsMaxMemory(length));
-                }
-
-                let v_start = addr - guest_addr;
-                let v_end = end - guest_addr;
-                return Ok(r.as_ref()[v_start as usize..v_end as usize].to_vec());
-            }
-        }
-
-        Err(Error::VmMemoryMappingNotFound(PhysAddr::new(addr)))
     }
 
     fn dump_region_to_file(&self, addr: u64) -> Result<()> {

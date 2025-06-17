@@ -1,8 +1,8 @@
 use crate::utils::Dirty;
-use crate::vm::setup::{GDT_SIZE, IDT_SIZE};
+use crate::vm::setup::{GDT_ENTRY_SIZE, IDT_ENTRY_SIZE};
 use bmvm_common::mem::VirtAddr;
 use kvm_bindings::{
-    __u16, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_SINGLESTEP, kvm_dtable, kvm_guest_debug,
+    __u16, CpuId, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_SINGLESTEP, kvm_dtable, kvm_guest_debug,
     kvm_guest_debug_arch, kvm_regs, kvm_sregs,
 };
 use kvm_ioctls::{VcpuExit, VcpuFd, VmFd};
@@ -21,6 +21,8 @@ pub enum Error {
     GetSregs(kvm_ioctls::Error),
     #[error("Failed to set guest debug: {0}")]
     SetGuestDebug(kvm_ioctls::Error),
+    #[error("Failed to set cpu id: {0}")]
+    SetCpuID(kvm_ioctls::Error),
     #[error("Error during execution: {0}")]
     Run(kvm_ioctls::Error),
 }
@@ -47,6 +49,27 @@ const EFER_LME: u64 = 0x1 << 8;
 /// Long Mode Active
 const EFER_LMA: u64 = 0x1 << 10;
 
+pub struct Gdt {
+    pub addr: VirtAddr,
+    pub entries: usize,
+    pub code: u16,
+    pub data: u16,
+}
+
+pub struct Idt {
+    pub addr: VirtAddr,
+    pub entries: usize,
+}
+
+pub struct Setup {
+    pub gdt: Gdt,
+    pub idt: Idt,
+    pub paging: VirtAddr,
+    pub stack: VirtAddr,
+    pub entry: VirtAddr,
+    pub cpu_id: CpuId,
+}
+
 pub struct Vcpu {
     inner: VcpuFd,
     regs: Dirty<kvm_regs>,
@@ -55,6 +78,9 @@ pub struct Vcpu {
     recent_exec: bool,
 }
 
+// -------------------------------------------------------------------------------------------------
+// General
+// -------------------------------------------------------------------------------------------------
 impl Vcpu {
     pub(crate) fn new(vm: &VmFd, id: u64) -> Result<Self> {
         let inner = vm.create_vcpu(id).map_err(|e| Error::CreateVcpu(e))?;
@@ -66,14 +92,6 @@ impl Vcpu {
             sregs: Dirty::new(sregs),
             recent_exec: false,
         })
-    }
-
-    pub fn set_regs(&mut self, regs: kvm_regs) {
-        self.regs.set(regs);
-    }
-
-    pub fn set_sregs(&mut self, sregs: kvm_sregs) {
-        self.sregs.set(sregs);
     }
 
     pub fn get_regs(&mut self) -> Result<&kvm_regs> {
@@ -89,92 +107,6 @@ impl Vcpu {
     pub fn get_all_regs(&mut self) -> Result<(&kvm_regs, &kvm_sregs)> {
         self.refresh_regs()?;
         Ok((self.regs.get(), self.sregs.get()))
-    }
-
-    pub fn setup_registers(
-        &mut self,
-        paging: VirtAddr,
-        gdt: VirtAddr,
-        idt: VirtAddr,
-        stack: VirtAddr,
-        entry: VirtAddr,
-    ) -> Result<()> {
-        // Special Register
-        self.refresh_regs()?;
-        self.sregs.mutate(|sregs| {
-            // set GDT (Guest will use LGDT later to update the GDT localtion)
-            sregs.gdt = kvm_dtable {
-                base: gdt.as_u64(),
-                limit: GDT_SIZE as __u16,
-                padding: [0; 3usize],
-            };
-
-            // Point to code selector
-            sregs.cs.selector = 0x08;
-            sregs.cs.base = 0;
-            sregs.cs.l = 1;
-
-            // Point to data selector
-            sregs.ds.selector = 0x10;
-            sregs.ds.base = 0;
-            sregs.ds.l = 1;
-
-            // set IDT (Guest will use LIDT later to update the IDT localtion)
-            sregs.idt = kvm_dtable {
-                base: idt.as_u64(),
-                limit: IDT_SIZE as __u16,
-                padding: [0; 3usize],
-            };
-
-            // enable protected mode and paging
-            sregs.cr0 = CR0_PE | CR0_PG;
-            // set the paging address
-            sregs.cr3 = paging.as_u64();
-            // set DEbug, and Physical-Address Extension, Page-Global Enable
-            sregs.cr4 = CR4_DE | CR4_PSE | CR4_PAE | CR4_PGE;
-            // set Long-Mode Active and Long-Mode Enabled
-            sregs.efer |= EFER_LMA | EFER_LME;
-            true
-        });
-
-        // "Normal" Register
-        self.regs.mutate(|regs| {
-            regs.rax = u64::MAX;
-            regs.rflags = 1 << 1;
-            regs.rflags |= 0x100;
-            regs.rip = entry.as_u64();
-            regs.rsp = stack.as_u64();
-            true
-        });
-
-        Ok(())
-    }
-
-    pub fn enable_single_step(&mut self) -> Result<()> {
-        let dbg = kvm_guest_debug {
-            control: KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_SINGLESTEP,
-            pad: 0,
-            arch: kvm_guest_debug_arch { debugreg: [0; 8] },
-        };
-        self.inner
-            .set_guest_debug(&dbg)
-            .map_err(|e| Error::SetGuestDebug(e))?;
-
-        self.regs.mutate(|regs| {
-            regs.rflags |= 0x100;
-            true
-        });
-
-        Ok(())
-    }
-
-    pub fn run(&mut self) -> Result<VcpuExit> {
-        self.propagate_regs()?;
-        self.propagate_sregs()?;
-
-        let exit = self.inner.run().map_err(|e| Error::Run(e));
-        self.recent_exec = true;
-        exit
     }
 
     fn refresh_regs(&mut self) -> Result<()> {
@@ -214,5 +146,136 @@ impl Vcpu {
         self.sregs
             .sync(|sregs| self.inner.set_sregs(sregs).map_err(|e| Error::SetSregs(e)))
             .unwrap_or(Result::<()>::Ok(()))
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// Setup
+// -------------------------------------------------------------------------------------------------
+impl Vcpu {
+    /// set up all required pointer and control registers for execution
+    pub fn setup(&mut self, setup: &Setup) -> Result<()> {
+        self.setup_cpuid(&setup.cpu_id)?;
+        self.setup_gdt(&setup.gdt)?;
+        self.setup_idt(&setup.idt)?;
+        self.setup_paging(setup.paging)?;
+        self.setup_execution(setup.stack, setup.entry)?;
+        Ok(())
+    }
+
+    /// set up the CPUID functions supported by the vcpu in guest mode
+    fn setup_cpuid(&mut self, cpu_id: &CpuId) -> Result<()> {
+        self.inner
+            .set_cpuid2(cpu_id)
+            .map_err(|e| Error::SetCpuID(e))
+    }
+
+    /// set up the Global Descriptor Table pointer and related segments
+    fn setup_gdt(&mut self, gdt: &Gdt) -> Result<()> {
+        self.refresh_regs()?;
+
+        self.sregs.mutate(|sregs| {
+            sregs.gdt = kvm_dtable {
+                base: gdt.addr.as_u64(),
+                limit: (gdt.entries * GDT_ENTRY_SIZE) as __u16 - 1,
+                padding: [0; 3usize],
+            };
+
+            sregs.cs.selector = gdt.code * GDT_ENTRY_SIZE as u16;
+            sregs.cs.base = 0;
+            sregs.cs.l = 1;
+
+            sregs.ds.selector = gdt.data * GDT_ENTRY_SIZE as u16;
+            sregs.ds.base = 0;
+            sregs.ds.l = 1;
+
+            true
+        });
+
+        Ok(())
+    }
+
+    /// set up the Interrupt Descriptor Table pointer
+    fn setup_idt(&mut self, idt: &Idt) -> Result<()> {
+        self.refresh_regs()?;
+
+        self.sregs.mutate(|sregs| {
+            sregs.idt = kvm_dtable {
+                base: idt.addr.as_u64(),
+                limit: (idt.entries * IDT_ENTRY_SIZE) as __u16,
+                padding: [0; 3usize],
+            };
+            true
+        });
+
+        Ok(())
+    }
+
+    /// set up the control registers for long mode with paging
+    fn setup_paging(&mut self, addr: VirtAddr) -> Result<()> {
+        self.refresh_regs()?;
+
+        self.sregs.mutate(|sregs| {
+            // enable protected mode and paging
+            sregs.cr0 = CR0_PE | CR0_PG;
+            // set the paging address
+            sregs.cr3 = addr.as_u64();
+            // set DEbug, and Physical-Address Extension, Page-Global Enable
+            sregs.cr4 = CR4_DE | CR4_PSE | CR4_PAE | CR4_PGE;
+            // set Long-Mode Active and Long-Mode Enabled
+            sregs.efer |= EFER_LMA | EFER_LME;
+            true
+        });
+
+        Ok(())
+    }
+
+    /// set up other execution relevant registers besides the structures required for long mode
+    fn setup_execution(&mut self, stack: VirtAddr, entry: VirtAddr) -> Result<()> {
+        self.refresh_regs()?;
+
+        self.regs.mutate(|regs| {
+            regs.rflags = 1 << 1;
+            regs.rip = entry.as_u64();
+            regs.rsp = stack.as_u64();
+            true
+        });
+
+        Ok(())
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// Execution
+// -------------------------------------------------------------------------------------------------
+impl Vcpu {
+    /// Enable single stepping for the next instruction. By enabling this feature, the guest will
+    /// exit with `VcpuExit::Debug` after executing the next instruction
+    pub fn enable_single_step(&mut self) -> Result<()> {
+        let dbg = kvm_guest_debug {
+            control: KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_SINGLESTEP,
+            pad: 0,
+            arch: kvm_guest_debug_arch { debugreg: [0; 8] },
+        };
+        self.inner
+            .set_guest_debug(&dbg)
+            .map_err(|e| Error::SetGuestDebug(e))?;
+
+        self.regs.mutate(|regs| {
+            regs.rflags |= 1 << 8;
+            true
+        });
+
+        Ok(())
+    }
+
+    /// Run the Vcpu by propagating any register changes made by the host to the guest and execute.
+    pub fn run(&mut self) -> Result<VcpuExit> {
+        self.propagate_regs()?;
+        self.propagate_sregs()?;
+
+        let exit = self.inner.run().map_err(|e| Error::Run(e));
+        self.recent_exec = true;
+        exit
     }
 }

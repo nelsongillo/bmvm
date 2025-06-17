@@ -8,7 +8,6 @@ use std::cmp::min;
 use std::os::fd::RawFd;
 use std::panic;
 use std::ptr::NonNull;
-use std::rc::Rc;
 use std::slice;
 
 const MMAP_FLAGS: [MapFlags; 2] = [MapFlags::MAP_PRIVATE, MapFlags::MAP_ANONYMOUS];
@@ -35,38 +34,6 @@ pub enum Error {
 
     #[error("no guest address set")]
     GuestAddressNotSet,
-}
-
-pub struct RegionCollection {
-    regions: Vec<RegionEntry>,
-}
-
-pub enum RegionEntry {
-    ReadOnly(Rc<Region<ReadOnly>>),
-    WriteOnly(Rc<Region<WriteOnly>>),
-    ReadWrite(Rc<Region<ReadWrite>>),
-    GuestOnly(Rc<Region<GuestOnly>>),
-}
-
-impl RegionCollection {
-    pub fn new() -> Self {
-        Self {
-            regions: Vec::new(),
-        }
-    }
-
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            regions: Vec::with_capacity(capacity),
-        }
-    }
-
-    pub fn add<R>(&mut self, entry: R)
-    where
-        R: Into<RegionEntry>,
-    {
-        self.regions.push(entry.into());
-    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -173,9 +140,6 @@ macro_rules! impl_as_ref_for_region {
                         StorageBackend::GuestMem(_) => {
                             panic!("deref_mut on guest memory");
                         },
-                        StorageBackend::Mmap(ptr) if ptr.as_ptr().is_null() => {
-                            panic!("deref_mut on null pointer");
-                        }
                         StorageBackend::Mmap(ptr) => {
                             unsafe { slice::from_raw_parts(ptr.as_ptr(), self.capacity) }
                         }
@@ -244,9 +208,6 @@ macro_rules! impl_as_mut_for_region {
                         StorageBackend::GuestMem(_) => {
                             panic!("deref_mut on guest memory");
                         },
-                        StorageBackend::Mmap(ptr) if ptr.as_ptr().is_null() => {
-                            panic!("deref_mut on null pointer");
-                        }
                         StorageBackend::Mmap(mut ptr) => {
                             unsafe { slice::from_raw_parts_mut(ptr.as_mut(), self.capacity) }
                         }
@@ -320,7 +281,6 @@ impl_write_for_region!(WriteOnly, ReadWrite);
 pub struct Allocator {
     m_flags: MapFlags,
     use_guest_only_fallback: bool,
-    regions: RegionCollection,
 }
 
 impl Allocator {
@@ -328,7 +288,6 @@ impl Allocator {
         Self {
             m_flags: MMAP_FLAGS.iter().fold(MapFlags::empty(), |acc, x| acc | *x),
             use_guest_only_fallback: !vm.check_extension(Cap::GuestMemfd),
-            regions: RegionCollection::new(),
         }
     }
 
