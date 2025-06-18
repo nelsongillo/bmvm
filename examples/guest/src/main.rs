@@ -1,18 +1,24 @@
 #![no_std]
 #![no_main]
+extern crate bmvm_guest;
 
-use bmvm_guest::{entry, expose, host};
+use core::arch::asm;
 
-#[host]
-unsafe extern "C" {
-    fn foo(func: u32, args: u32);
+fn write(port: u16, value: u8) {
+    unsafe {
+        asm!(
+        "out dx, al",
+        in("dx") port,
+        in("al") value,
+        );
+    }
 }
 
-#[expose]
-fn bar(a: u32) {}
+fn main() {
+    write(0x123, 0x80);
+}
 
-#[expose]
-fn baz(a: u32) {}
-
-#[entry]
-fn main() {}
+#[unsafe(no_mangle)]
+pub extern "C" fn __process_entry() {
+    main();
+}

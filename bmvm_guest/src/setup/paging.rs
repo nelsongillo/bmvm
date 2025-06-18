@@ -13,19 +13,15 @@ pub(crate) fn setup(table: &LayoutTable, sys: LayoutTableEntry) -> Result<(), Ex
     let mut mapper = unsafe { MappedPageTable::new(pml4, Identity {}) };
     let mut allocator = PseudoAllocator::new(sys);
 
-    // iterate over the table and initialize the paging system
-    for i in 0..table.entries.len() {
-        if !table.entries[i].is_present() {
-            if i == 0 {
-                // there must be at least one entry present
-                return Err(ExitCode::InvalidMemoryLayout);
-            }
-            // break if the last entry is reached
-            break;
-        }
+    if !table.entries[0].is_present() {
+        // there must be at least one entry present
+        return Err(ExitCode::InvalidMemoryLayout);
+    }
 
+    // iterate over the table and initialize the paging system
+    for e in table.entries.iter() {
         // entry is present -> initialize the page
-        create_mapping(&mut mapper, &mut allocator, table.entries[i])?;
+        create_mapping(&mut mapper, &mut allocator, *e)?;
     }
 
     Ok(())
@@ -131,7 +127,7 @@ unsafe impl FrameAllocator<Size4KiB> for PseudoAllocator {
 }
 
 impl<S: PageSize> FrameDeallocator<S> for PseudoAllocator {
-    unsafe fn deallocate_frame(&mut self, frame: PhysFrame<S>) {
+    unsafe fn deallocate_frame(&mut self, _frame: PhysFrame<S>) {
         // Noop, as currently not intended to unmap and therefore dealloc
     }
 }

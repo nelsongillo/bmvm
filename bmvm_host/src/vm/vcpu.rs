@@ -183,10 +183,13 @@ impl Vcpu {
 
             sregs.cs.selector = gdt.code * GDT_ENTRY_SIZE as u16;
             sregs.cs.base = 0;
+            sregs.cs.limit = 0xF_FFFF;
             sregs.cs.l = 1;
+            sregs.cs.g = 1;
 
             sregs.ds.selector = gdt.data * GDT_ENTRY_SIZE as u16;
             sregs.ds.base = 0;
+            sregs.ds.limit = 0xF_FFFF;
             sregs.ds.l = 1;
 
             true

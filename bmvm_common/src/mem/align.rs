@@ -1,5 +1,5 @@
+use core::marker::PhantomData;
 use core::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
-use std::marker::PhantomData;
 
 /// This is a quick const wrapper for the DefaultAlign::align_floor function
 pub const fn align_floor(addr: u64) -> u64 {
@@ -82,6 +82,7 @@ pub struct AlignedNonZero<I, A: Align = DefaultAlign> {
 macro_rules! impl_aligned_non_zero {
     ($($int:ty => $nonzero:ty => $aligned_name:ident),* $(,)?) => {
         $(
+        #[allow(type_alias_bounds)]
         /// Aligned non-zero type for $int
         pub type $aligned_name<A: Align = DefaultAlign> = AlignedNonZero<$nonzero, A>;
 

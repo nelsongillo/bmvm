@@ -93,6 +93,7 @@ macro_rules! for_each_function_signature {
 
 macro_rules! impl_params {
     ($n:tt $($t:ident)*) => (
+        #[allow(unused_parens)]
         impl<$($t),*> Params for ($($t),*)  where
             $($t: Type,)* {}
     );

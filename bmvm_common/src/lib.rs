@@ -1,6 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![feature(alloc_error_handler)]
 #![feature(sync_unsafe_cell)]
+#[cfg(feature = "std")]
 extern crate alloc;
 extern crate core;
 

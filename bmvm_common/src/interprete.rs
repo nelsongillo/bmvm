@@ -1,3 +1,4 @@
+#[cfg(feature = "std")]
 use core::fmt::{Debug, Display};
 #[cfg(feature = "std")]
 use std::fmt::Formatter;
@@ -19,12 +20,11 @@ impl Debug for InterpretError {
             InterpretError::TooSmall(want, got) => {
                 write!(
                     f,
-                    "provided slice was to small: expected {} but got {}",
-                    want, got
+                    "provided slice was to small: expected {want} but got {got}",
                 )
             }
             InterpretError::Misaligned(want, got) => {
-                write!(f, "misaligned pointer: expected {} but got {}", want, got)
+                write!(f, "misaligned pointer: expected {want} but got {got}")
             }
         }
     }
@@ -37,12 +37,11 @@ impl Display for InterpretError {
             InterpretError::TooSmall(want, got) => {
                 write!(
                     f,
-                    "provided slice was to small: expected {} but got {}",
-                    want, got
+                    "provided slice was to small: expected {want} but got {got}"
                 )
             }
             InterpretError::Misaligned(want, got) => {
-                write!(f, "misaligned pointer: expected {} but got {}", want, got)
+                write!(f, "misaligned pointer: expected {want} but got {got}")
             }
         }
     }

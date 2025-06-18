@@ -42,8 +42,8 @@ pub(crate) fn idt() -> Vec<u8> {
 pub(crate) fn gdt() -> Vec<u8> {
     let mut gdt = Vec::new();
     gdt.extend_from_slice(&gdt_entry(0, 0, 0, 0));
-    gdt.extend_from_slice(&gdt_entry(0, 0xFFFF, 0x9A, 0xA));
-    gdt.extend_from_slice(&gdt_entry(0, 0xFFFF, 0x92, 0xC));
+    gdt.extend_from_slice(&gdt_entry(0, 0xF_FFFF, 0x9A, 0b1010));
+    gdt.extend_from_slice(&gdt_entry(0, 0xF_FFFF, 0x92, 0b1010));
     gdt
 }
 

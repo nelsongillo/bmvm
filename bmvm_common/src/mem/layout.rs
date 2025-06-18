@@ -21,15 +21,13 @@ impl LayoutTable {
     }
 
     #[cfg(feature = "std")]
-    pub fn from_vec(vec: &Vec<LayoutTableEntry>) -> Result<LayoutTable, &'static str> {
+    pub fn from_vec(vec: &[LayoutTableEntry]) -> Result<LayoutTable, &'static str> {
         if vec.len() > 512 {
             return Err("layout table cannot contain more than 512 entries");
         }
         let mut l = LayoutTable::new();
-        let mut idx = 0;
-        for e in vec.iter() {
+        for (idx, e) in vec.iter().enumerate() {
             l.entries[idx] = *e;
-            idx += 1;
         }
         Ok(l)
     }
@@ -39,7 +37,7 @@ impl LayoutTable {
         self.entries
             .iter()
             .filter(|e| e.is_present())
-            .map(|e| e.clone())
+            .copied()
             .collect::<Vec<LayoutTableEntry>>()
     }
 
@@ -48,7 +46,7 @@ impl LayoutTable {
             .iter()
             .enumerate()
             .find(|(_, e)| e.flags().intersects(flag))
-            .map(|(i, e)| (i, e.clone()))
+            .map(|(i, e)| (i, *e))
     }
 }
 
@@ -216,9 +214,7 @@ impl LayoutTableEntry {
 
     /// Checks if the entry is present
     pub fn is_present(&self) -> bool {
-        let f = self.flags();
-        let b = f.contains(Flags::PRESENT);
-        b
+        self.flags().contains(Flags::PRESENT)
     }
 
     pub fn flags(&self) -> Flags {

@@ -13,4 +13,4 @@ anyhow = { version = "1.0.98", optional = true }
 memchr = { version = "2.7.4", optional = true }
 serde = { version = "1.0.219", default-features = false, features = ["derive"] }
 x86_64 = "0.15.2"
-spin = "0.10.0"
+spin = { version = "0.10.0", default-features = false, features = ["once"] }

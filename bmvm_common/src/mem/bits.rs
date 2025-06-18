@@ -1,6 +1,4 @@
-use core::hash::Hash;
-
-pub trait AddrSpace: Clone + Copy + PartialEq + Eq + PartialOrd + Ord + Hash {
+pub trait AddrSpace: Clone + Copy + PartialEq + Eq + PartialOrd + Ord {
     fn bits() -> u8;
     fn mask() -> u64 {
         (1 << Self::bits()) - 1
@@ -9,21 +7,22 @@ pub trait AddrSpace: Clone + Copy + PartialEq + Eq + PartialOrd + Ord + Hash {
 
 pub type DefaultAddrSpace = Impl;
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Impl;
 
 impl AddrSpace for Impl {
     fn bits() -> u8 {
-        #[cfg(feature = "std")]
-        use phys_bits_std::phys_address_bits;
+        // #[cfg(feature = "std")]
+        // use phys_bits_std::phys_address_bits;
 
-        #[cfg(not(feature = "std"))]
+        // #[cfg(not(feature = "std"))]
         use phys_bits_nostd::phys_address_bits;
 
         phys_address_bits()
     }
 }
 
+/*
 #[cfg(feature = "std")]
 mod phys_bits_std {
     use core::arch::x86_64::__cpuid;
@@ -42,6 +41,7 @@ mod phys_bits_std {
 }
 
 #[cfg(not(feature = "std"))]
+*/
 mod phys_bits_nostd {
     use core::arch::x86_64::__cpuid;
     use core::sync::atomic::{AtomicU8, Ordering};

@@ -2,12 +2,9 @@
 TODO:
  - setup idt
  - setup gdt
- - setup paging
  - setup stack
- - setup heap
  - setup host-calls
  */
-use crate::panic::exit_with_code;
 use bmvm_common::error::ExitCode;
 use bmvm_common::interprete::Interpret;
 use bmvm_common::mem::{Flags, LayoutTable, LayoutTableEntry};
@@ -17,22 +14,13 @@ mod gdt;
 mod idt;
 mod paging;
 
-#[unsafe(no_mangle)]
-pub extern "C" fn _start() -> ! {
-    let code = match setup() {
-        Ok(_) => ExitCode::Normal,
-        Err(code) => code,
-    };
-
-    exit_with_code(code)
-}
-
 /// The address of the memory info structure, which must be present on initialization.
 /// The info table will span at max 1 page
 const MEM_INFO_ADDR: u64 = 0x1000;
 
 /// Parse the memory info structure and initialize the paging system etc.
-fn setup() -> Result<(), ExitCode> {
+#[inline(always)]
+pub(crate) fn setup() -> Result<(), ExitCode> {
     let raw = unsafe { core::slice::from_raw_parts(MEM_INFO_ADDR as *const u8, 1024) };
     let table = LayoutTable::from_bytes(raw).map_err(|_| ExitCode::InvalidMemoryLayoutTable)?;
 

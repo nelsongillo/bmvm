@@ -4,11 +4,11 @@ use core::marker::PhantomData;
 use core::ops::{Add, AddAssign, Sub, SubAssign};
 
 /// Alias for consistent imports
-#[cfg(any(target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 pub type VirtAddr = x86_64::VirtAddr;
 
 /// Limit the physical address range to the min(supported address bits, 48) bits.
-#[cfg(any(target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct PhysAddr<B: AddrSpace = DefaultAddrSpace> {
@@ -16,7 +16,7 @@ pub struct PhysAddr<B: AddrSpace = DefaultAddrSpace> {
     _bits: PhantomData<B>,
 }
 
-#[cfg(any(target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 impl<B: AddrSpace> PhysAddr<B> {
     /// Creates a new physical address.
     ///
@@ -90,7 +90,7 @@ impl<B: AddrSpace> PhysAddr<B> {
     #[inline]
     pub fn as_virt_addr(self) -> VirtAddr {
         if self.is_upper_half() {
-            let shifted = self.inner << 48 - B::bits();
+            let shifted = self.inner << (48 - B::bits());
             VirtAddr::new_truncate(shifted)
         } else {
             VirtAddr::new_truncate(self.inner)
@@ -113,7 +113,6 @@ impl<B: AddrSpace> fmt::Debug for PhysAddr<B> {
 
 impl<B: AddrSpace> fmt::Binary for PhysAddr<B> {
     #[inline]
-
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Binary::fmt(&self.inner, f)
     }
@@ -121,7 +120,6 @@ impl<B: AddrSpace> fmt::Binary for PhysAddr<B> {
 
 impl<B: AddrSpace> fmt::LowerHex for PhysAddr<B> {
     #[inline]
-
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::LowerHex::fmt(&self.inner, f)
     }
@@ -129,7 +127,6 @@ impl<B: AddrSpace> fmt::LowerHex for PhysAddr<B> {
 
 impl<B: AddrSpace> fmt::Octal for PhysAddr<B> {
     #[inline]
-
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Octal::fmt(&self.inner, f)
     }
@@ -137,7 +134,6 @@ impl<B: AddrSpace> fmt::Octal for PhysAddr<B> {
 
 impl<B: AddrSpace> fmt::UpperHex for PhysAddr<B> {
     #[inline]
-
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::UpperHex::fmt(&self.inner, f)
     }
@@ -240,5 +236,3 @@ mod tests {
         assert_eq!(virt.as_u64(), phys.as_u64());
     }
 }
-
-// 100 0000 0000 0000 0000 0000 0000 0001 0010 0011

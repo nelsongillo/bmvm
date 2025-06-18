@@ -61,7 +61,7 @@ pub fn host_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
 fn gen_stub(func: &ForeignItemFn, meta: &CallMeta) -> proc_macro2::TokenStream {
     let vis = &func.vis;
     let sig = &func.sig;
-    let ident = &sig.ident;
+    // let ident = &sig.ident;
 
     let call_id = meta.id();
 

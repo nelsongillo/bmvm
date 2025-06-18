@@ -28,7 +28,7 @@ impl Djb2 for Djb232 {
                 .0
                 .wrapping_shl(5)
                 .wrapping_add(self.0)
-                .wrapping_add(byte.clone() as Self::Output);
+                .wrapping_add(*byte as Self::Output);
         }
     }
 
@@ -62,7 +62,7 @@ impl Djb2 for Djb264 {
                 .0
                 .wrapping_shl(5)
                 .wrapping_add(self.0)
-                .wrapping_add(byte.clone() as Self::Output);
+                .wrapping_add(*byte as Self::Output);
         }
     }
 
