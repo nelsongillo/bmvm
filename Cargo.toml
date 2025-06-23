@@ -8,4 +8,6 @@ members = [
     "bmvm_macros",
     "examples/host",
     "examples/longmode",
+    "examples/cpuid",
+    "tooling/printlayout", "examples/cpuid-host",
 ]

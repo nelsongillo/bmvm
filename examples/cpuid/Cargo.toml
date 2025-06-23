@@ -1,0 +1,8 @@
+[package]
+name = "cpuid"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bmvm-common = {path = "../../bmvm_common", default-features = false}
+bmvm-guest = {path = "../../bmvm_guest"}

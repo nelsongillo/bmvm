@@ -1,16 +1,22 @@
-use crate::alloc::{Allocator, ProtoRegion, ReadWrite, Region};
+use crate::alloc::{Allocator, ReadWrite, Region};
 use crate::elf::ExecBundle;
 use crate::vm::vcpu::Vcpu;
-use crate::vm::{setup, vcpu};
-use crate::{GUEST_DEFAULT_STACK_SIZE, GUEST_STACK_ADDR, GUEST_TMP_SYSTEM_SIZE};
+use crate::vm::{Config, setup, vcpu};
+use crate::{GUEST_STACK_ADDR, GUEST_TMP_SYSTEM_SIZE};
+use bmvm_common::cpuid::ADDR_SPACE_FUNC;
+use bmvm_common::error::ExitCode;
 use bmvm_common::mem::{
     Align, AlignedNonZeroUsize, DefaultAlign, Flags, LayoutTableEntry, PhysAddr, VirtAddr,
     align_floor,
 };
 use bmvm_common::{
-    BMVM_MEM_LAYOUT_TABLE, BMVM_TMP_GDT, BMVM_TMP_IDT, BMVM_TMP_PAGING, BMVM_TMP_SYS,
+    BMVM_MEM_LAYOUT_TABLE, BMVM_TMP_GDT, BMVM_TMP_IDT, BMVM_TMP_PAGING, BMVM_TMP_SYS, cpuid,
+    region_abs_offset,
 };
-use kvm_bindings::{KVM_API_VERSION, KVM_MAX_CPUID_ENTRIES, kvm_userspace_memory_region};
+use kvm_bindings::{
+    __IncompleteArrayField, CpuId, KVM_API_VERSION, KVM_MAX_CPUID_ENTRIES, kvm_cpuid_entry2,
+    kvm_cpuid2, kvm_userspace_memory_region,
+};
 use kvm_ioctls::{Cap, Kvm, VcpuExit, VmFd};
 use std::io::Write;
 
@@ -36,21 +42,6 @@ pub enum Error {
     Setup(#[from] setup::Error),
     #[error("Allocator error: {0:?}")]
     Allocator(#[from] crate::alloc::Error),
-}
-
-#[derive(Debug)]
-pub struct Config {
-    stack_size: AlignedNonZeroUsize,
-    max_memory: u64,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            stack_size: AlignedNonZeroUsize::new_ceil(GUEST_DEFAULT_STACK_SIZE).unwrap(),
-            max_memory: 1024 * 1024 * 1024,
-        }
-    }
 }
 
 pub struct Vm {
@@ -128,43 +119,90 @@ impl Vm {
             }
         }
 
-        // #[cfg(feature = "debug")]
-        self.vcpu.enable_single_step()?;
+        if self.cfg.debug {
+            self.vcpu.enable_single_step()?;
+        }
 
         Ok(())
     }
 
     /// run the guest
     pub(crate) fn run(&mut self) -> Result<()> {
+        self.dump_region_to_file(BMVM_TMP_SYS.as_u64(), String::from("dump_layout.bin"))?;
+
         log::info!("Starting VM");
         log::debug!("stack: {:x}", GUEST_STACK_ADDR().as_virt_addr().as_u64());
 
+        let mut buf_1 = Vec::with_capacity(8);
+        let mut buf_2 = Vec::with_capacity(8);
+
         loop {
             match self.vcpu.run()? {
-                VcpuExit::IoOut(port, data) => {
-                    log::info!(
-                        "IO write on port {:#x} with data {:#x} -> {}",
-                        port,
-                        data[0],
-                        data[0] as char
-                    )
-                }
+                VcpuExit::IoOut(port, data) => match port {
+                    1 => {
+                        buf_2.clear();
+                        if data.len() == 1 {
+                            buf_1.push(data[0]);
+                        } else {
+                            buf_1.clear();
+                        }
+
+                        if buf_1.len() == 8 {
+                            let mut vbuf = [0u8; 8];
+                            vbuf.copy_from_slice(buf_1.as_slice());
+                            let v = u64::from_le_bytes(vbuf);
+                            log::info!("LayoutTableEntry: {}", LayoutTableEntry::from(v));
+                            buf_1.clear();
+                        }
+                    }
+                    2 => {
+                        buf_1.clear();
+                        if data.len() == 1 {
+                            buf_2.push(data[0]);
+                        } else {
+                            buf_2.clear();
+                        }
+
+                        if buf_2.len() == 8 {
+                            let mut vbuf = [0u8; 8];
+                            vbuf.copy_from_slice(buf_2.as_slice());
+                            let v = u64::from_le_bytes(vbuf);
+                            log::info!("Address: {:#X}", v);
+                            buf_2.clear();
+                        }
+                    }
+                    _ => {
+                        log::info!(
+                            "IO write on port {:#x} with data {:X?} -> {}",
+                            port,
+                            data,
+                            String::from_utf8_lossy(&data)
+                        )
+                    }
+                },
                 VcpuExit::IoIn(port, data) => {
                     log::info!("IO read on port {:#x} with data {:#x}", port, data[0])
                 }
                 VcpuExit::Hlt => {
                     log::info!("Halt called -> shutdown vm");
+                    let exit_code = ExitCode::from((self.vcpu.get_regs()?.rax & 0xFF) as u8);
+                    match exit_code {
+                        ExitCode::Normal => log::info!("Normal exit"),
+                        _ => log::error!("Exit Code: {:?}", exit_code),
+                    }
+                    self.react_to_exit_code(exit_code)?;
                     break;
                 }
                 VcpuExit::Debug(_) => {
-                    log::debug!("Debug called");
+                    let rip = self.vcpu.get_regs()?.rip;
+                    log::debug!("Debug called with RIP: {:#x}", rip);
                     self.print_debug_info()?;
                     self.vcpu.enable_single_step()?
                 }
                 reason => {
                     log::error!("Unexpected exit reason: {:?}", reason);
                     self.print_debug_info()?;
-                    self.dump_region_to_file(0x0)?;
+                    self.dump_region(0x1000)?;
                     break;
                 }
             }
@@ -196,7 +234,7 @@ impl Vm {
         let entry = LayoutTableEntry::new(
             PhysAddr::new(guest_addr),
             size,
-            Flags::PRESENT | Flags::WRITE,
+            Flags::PRESENT | Flags::WRITE | Flags::STACK,
         );
 
         Ok((stack, entry))
@@ -218,21 +256,30 @@ impl Vm {
         layout.insert(0, layout_sys);
 
         // write GDT
-        temp_sys_region.write_offset(BMVM_TMP_GDT.as_usize(), setup::gdt().as_ref())?;
+        temp_sys_region.write_offset(
+            region_abs_offset(BMVM_TMP_GDT.as_u64()) as usize,
+            setup::gdt().as_ref(),
+        )?;
         // write LDT
-        temp_sys_region.write_offset(BMVM_TMP_IDT.as_usize(), setup::idt().as_ref())?;
+        temp_sys_region.write_offset(
+            region_abs_offset(BMVM_TMP_IDT.as_u64()) as usize,
+            setup::idt().as_ref(),
+        )?;
         // write paging
-        let entries = setup::paging(&layout);
+        let start_paging = region_abs_offset(BMVM_TMP_PAGING.as_u64()) as usize;
+        let entries = setup::paging(&self.cfg, &layout);
         for (idx, entry) in entries.iter() {
-            let write_to = BMVM_TMP_PAGING.as_usize() + idx * 8;
+            let write_to = start_paging + idx * 8;
+            let v = u64::from_ne_bytes(*entry);
+            log::info!("8PTE at index {idx}, {v:#x}");
             temp_sys_region.write_offset(write_to, entry)?;
         }
 
         // write layout table
-        for (i, entry) in layout.iter().enumerate() {
-            let offset = i * size_of::<LayoutTableEntry>();
-            temp_sys_region
-                .write_offset(BMVM_MEM_LAYOUT_TABLE.as_usize() + offset, &entry.as_array())?;
+        let start_layout_table = region_abs_offset(BMVM_MEM_LAYOUT_TABLE.as_u64()) as usize;
+        for (idx, entry) in layout.iter().enumerate() {
+            let offset = idx * size_of::<LayoutTableEntry>();
+            temp_sys_region.write_offset(start_layout_table + offset, &entry.as_array())?;
         }
 
         Ok(temp_sys_region)
@@ -240,12 +287,6 @@ impl Vm {
 
     /// Setting up the Vcpu with pointers to all necessary structures (Paging, IDT, GDT, etc)
     fn setup_cpu(&mut self, entry_point: VirtAddr) -> Result<()> {
-        // setup vcpu cpuid
-        let supported_cpuid_funcs = self
-            .kvm
-            .get_supported_cpuid(KVM_MAX_CPUID_ENTRIES)
-            .map_err(|e| Error::Kvm(e))?;
-
         let setup = vcpu::Setup {
             gdt: vcpu::Gdt {
                 addr: BMVM_TMP_GDT.as_virt_addr(),
@@ -260,35 +301,49 @@ impl Vm {
             paging: BMVM_TMP_PAGING.as_virt_addr(),
             stack: GUEST_STACK_ADDR().as_virt_addr(),
             entry: entry_point,
-            cpu_id: supported_cpuid_funcs,
+            cpu_id: setup::cpuid()?,
         };
 
         self.vcpu.setup(&setup).map_err(|e| Error::Vcpu(e))
     }
 
+    fn react_to_exit_code(&mut self, code: ExitCode) -> Result<()> {
+        match code {
+            ExitCode::InvalidMemoryLayoutTableTooSmall => self.dump_region(0x0),
+            ExitCode::InvalidMemoryLayoutTableMisaligned => self.dump_region(0x0),
+            ExitCode::InvalidMemoryLayout => self.dump_region(0x0),
+            _ => Ok(()),
+        }
+    }
+
     fn print_debug_info(&mut self) -> Result<()> {
         let (regs, sregs) = self.vcpu.get_all_regs()?;
+        log::debug!("RIP -> {:#x}", regs.rip);
         // Store the relevant register values to avoid holding the mutable borrow
         let cr2 = sregs.cr2;
 
         // Print registers before getting memory to avoid borrow conflict
-        log::debug!("registers -> {:?}", regs);
-        log::debug!("special registers -> {:?}", sregs);
+        log::info!("registers -> {:?}", regs);
+        // log::debug!("special registers -> {:?}", sregs);
 
         if cr2 != 0 {
             log::info!("PAGE FAULT at: cr2 -> {:#x}", cr2);
-            self.dump_region_to_file(cr2)?;
+            self.dump_region(cr2)?;
         }
 
         Ok(())
     }
 
-    fn dump_region_to_file(&self, addr: u64) -> Result<()> {
+    fn dump_region(&self, addr: u64) -> Result<()> {
+        self.dump_region_to_file(addr, format!("dump_{:#x}.bin", addr))
+    }
+
+    fn dump_region_to_file(&self, addr: u64, name: String) -> Result<()> {
         for r in self.mem_mappings.iter() {
             let guest_addr = r.guest_addr().as_u64();
             let size = r.capacity();
             if (guest_addr..(guest_addr + size as u64)).contains(&addr) {
-                let mut file = std::fs::File::create(format!("dump_{:#x}.bin", addr)).unwrap();
+                let mut file = std::fs::File::create(name).unwrap();
                 file.write_all(r.as_ref()).unwrap();
                 return Ok(());
             }

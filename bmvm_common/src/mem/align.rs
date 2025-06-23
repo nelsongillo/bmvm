@@ -1,14 +1,47 @@
 use core::marker::PhantomData;
 use core::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
+/// Align address downwards.
+///
+/// Returns the greatest `x` with alignment `align` so that `x <= addr`.
+///
+/// Panics if the alignment is not a power of two.
+#[inline]
+const fn align_down(addr: u64, align: u64) -> u64 {
+    assert!(align.is_power_of_two(), "`align` must be a power of two");
+    let mask = align - 1;
+    if addr & mask == 0 {
+        return addr;
+    }
+    addr & !(align - 1)
+}
+
+/// Align address upwards.
+///
+/// Returns the smallest `x` with alignment `align` so that `x >= addr`.
+///
+/// Panics if the alignment is not a power of two or if an overflow occurs.
+#[inline]
+const fn align_up(addr: u64, align: u64) -> u64 {
+    assert!(align.is_power_of_two(), "`align` must be a power of two");
+    let mask = align - 1;
+    if addr & mask == 0 {
+        return addr;
+    }
+
+    (addr | mask)
+        .checked_add(1)
+        .expect("attempt to add with overflow")
+}
+
 /// This is a quick const wrapper for the DefaultAlign::align_floor function
 pub const fn align_floor(addr: u64) -> u64 {
-    x86_64::align_down(addr, DefaultAlign::ALIGNMENT)
+    align_down(addr, DefaultAlign::ALIGNMENT)
 }
 
 /// This is a quick const wrapper for the DefaultAlign::align_ceil function
 pub const fn align_ceil(addr: u64) -> u64 {
-    x86_64::align_up(addr, DefaultAlign::ALIGNMENT)
+    align_up(addr, DefaultAlign::ALIGNMENT)
 }
 
 /// Trait to abstract over different page sizes based on the underlying architecture.

@@ -1,17 +1,34 @@
-use bmvm_host::{Config, Runtime};
-use std::env::args;
+use bmvm_host::{ConfigBuilder, Runtime};
+use clap::Parser;
 
-// TODO: Why trigger KVM_EXIT_SHUTDOWN on entry?! probably
+const ENV_GUEST: &str = "GUEST";
+const ENV_DEBUG: &str = "DEBUG";
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    #[arg(short, long, env = ENV_GUEST)]
+    guest: String,
+
+    #[arg(short, long, env = ENV_DEBUG, default_value_t = false)]
+    debug: bool,
+}
+
 fn main() -> anyhow::Result<()> {
-    env_logger::init();
+    let args = Args::parse();
 
-    let args = args().collect::<Vec<String>>();
-    if args.len() < 2 {
-        log::error!("Usage: {} <executable>", args[0]);
-        return Ok(());
+    // logging
+    let mut log_builder = env_logger::Builder::from_default_env();
+    if args.debug {
+        log_builder.filter_level(log::LevelFilter::Debug);
+    } else {
+        log_builder.filter_level(log::LevelFilter::Info);
     }
+    log_builder.init();
 
-    let mut runtime = Runtime::new(Config::default(), args[1].clone())?;
+    // configuration
+    let cfg = ConfigBuilder::new().debug(args.debug).build();
+    let mut runtime = Runtime::new(cfg, args.guest)?;
     match runtime.run() {
         Ok(_) => Ok(()),
         Err(e) => Err(anyhow::anyhow!("{:?}", e)),

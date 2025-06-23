@@ -1,6 +1,7 @@
 use crate::interprete::{Interpret, Zero};
 use crate::mem::{Align, DefaultAlign, PhysAddr};
 use bitflags::bitflags;
+use core::fmt::{Display, Formatter};
 use x86_64::structures::paging::PageTableFlags;
 
 pub const MAX_REGION_SIZE: u64 = u16::MAX as u64 * DefaultAlign::ALIGNMENT;
@@ -86,7 +87,7 @@ impl Iterator for LayoutTableIter<'_> {
 }
 
 bitflags! {
-    #[derive(Copy, Clone)]
+    #[derive(Copy, Clone, PartialEq, Eq)]
     pub struct Flags: u8 {
         /// Indicates the entrys presence.
         const PRESENT = 1;
@@ -174,7 +175,7 @@ impl LayoutTableEntry {
         // set the size
         value |= (size as u64) << 8;
         // set the address
-        value |= (addr.as_u64()) << 16;
+        value |= (addr.as_u64() & 0xFFFF_FFFF_FFFF) << 16;
 
         LayoutTableEntry(value)
     }
@@ -234,7 +235,12 @@ impl LayoutTableEntry {
 
     /// Returns the starting address
     pub fn addr(&self) -> PhysAddr {
-        PhysAddr::new((self.0 & Self::MASK_RETRIEVE_ADDR) >> 16)
+        PhysAddr::new(self.addr_raw())
+    }
+
+    /// Returns the address as is
+    pub fn addr_raw(&self) -> u64 {
+        (self.0 & Self::MASK_RETRIEVE_ADDR) >> 16
     }
 
     #[inline]
@@ -250,6 +256,31 @@ impl LayoutTableEntry {
     #[inline]
     pub const fn is_valid_size(size: u32) -> bool {
         size > 0 && size == size & (Self::MASK_RETRIEVE_SIZE >> 8) as u32
+    }
+}
+
+impl From<u64> for LayoutTableEntry {
+    fn from(value: u64) -> Self {
+        LayoutTableEntry(value)
+    }
+}
+
+#[cfg(feature = "std")]
+impl Display for LayoutTableEntry {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        let addr = self.addr_raw() as usize;
+        let size = self.len() as usize;
+        let stack = self.flags().contains(Flags::STACK);
+        let write = self.flags().contains(Flags::WRITE);
+        let code = self.flags().contains(Flags::CODE);
+        let system = self.flags().contains(Flags::SYSTEM);
+        let present = self.flags().contains(Flags::PRESENT);
+
+        write!(
+            f,
+            "Addr: {:#x} Size: {} Stack: {} Write: {} Code: {} System: {} Present: {}",
+            addr, size, stack, write, code, system, present,
+        )
     }
 }
 

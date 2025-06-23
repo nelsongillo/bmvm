@@ -1,5 +1,6 @@
 /* define page size - 4KB for x86_64 */
 PAGE_SIZE = 0x1000;
+ENTRY(_start)
 
 SECTIONS
 {
@@ -13,7 +14,10 @@ SECTIONS
   .data : { *(.data*) }
 
   . = ALIGN(PAGE_SIZE);
-  .bss : { *(.bss) }
+  .bss : { *(.bss*) }
+
+  . = ALIGN(PAGE_SIZE);
+  .got : { *(.got*) }
 
   .bmvm.call.host : ALIGN(4) {
     KEEP(*(.bmvm.call.host));

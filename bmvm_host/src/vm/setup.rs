@@ -1,9 +1,11 @@
-use crate::{GUEST_DEFAULT_STACK_SIZE, GUEST_STACK_ADDR, GUEST_SYSTEM_ADDR, MIN_TEXT_SEGMENT};
-use bmvm_common::BMVM_TMP_PAGING;
+use crate::{Config, GUEST_STACK_ADDR, GUEST_SYSTEM_ADDR, MIN_TEXT_SEGMENT};
+use bmvm_common::cpuid::ADDR_SPACE_FUNC;
 use bmvm_common::mem::{
     Align, DefaultAlign, Flags, LayoutTableEntry, Page1GiB, Page2MiB, Page4KiB, VirtAddr,
     align_ceil, aligned_and_fits,
 };
+use bmvm_common::{BMVM_TMP_PAGING, cpuid};
+use kvm_bindings::{CpuId, kvm_cpuid_entry2};
 use std::collections::HashSet;
 
 // Values used for system region requirement estimation
@@ -30,6 +32,27 @@ type Result<T> = core::result::Result<T, Error>;
 pub enum Error {
     #[error("Empty Module")]
     EmptyModule,
+    #[error("Invalid argument")]
+    CpuID,
+}
+
+pub(crate) fn cpuid() -> Result<CpuId> {
+    // setup vcpu cpuid
+    let mut supported_cpuid_funcs: CpuId = CpuId::new(1).map_err(|_| Error::CpuID)?;
+    let (eax, ebx) = cpuid::cpuid_addr_space();
+    supported_cpuid_funcs
+        .push(kvm_cpuid_entry2 {
+            function: ADDR_SPACE_FUNC,
+            index: 0,
+            flags: 0,
+            eax,
+            ebx,
+            ecx: 0,
+            edx: 0,
+            padding: [0; 3usize],
+        })
+        .map_err(|_| Error::CpuID)?;
+    Ok(supported_cpuid_funcs)
 }
 
 /// Initializes a new Interrupt Descriptor Table (IDT).
@@ -59,7 +82,7 @@ pub(crate) fn gdt() -> Vec<u8> {
 /// [PML4][PDPT_1]...[PDPT_N][PD_1]...[PD_N][PT_1]...[PT_N]
 /// The first entry in the PML4 results in an index of 0, the first entry 1, etc.
 /// For PDPT_1 the index is in range [512, 1023], and so on.
-pub(crate) fn paging(layout: &Vec<LayoutTableEntry>) -> Vec<(usize, [u8; 8])> {
+pub(crate) fn paging(cfg: &Config, layout: &Vec<LayoutTableEntry>) -> Vec<(usize, [u8; 8])> {
     let mut output: Vec<(usize, [u8; 8])> = Vec::new();
 
     let pdpt_to_addr = |pdpt: usize| {
@@ -82,7 +105,7 @@ pub(crate) fn paging(layout: &Vec<LayoutTableEntry>) -> Vec<(usize, [u8; 8])> {
     // entries for the stack
     let (stack, size_stack) = page_with_flags(layout, Flags::STACK).unwrap_or((
         VirtAddr::new_truncate(Page1GiB::align_floor(GUEST_STACK_ADDR().as_u64())),
-        GUEST_DEFAULT_STACK_SIZE,
+        Page1GiB::align_ceil(cfg.stack_size.get() as u64) as usize,
     ));
     if pml4.insert(stack.p4_index()) {
         pdpt += 512;
@@ -115,7 +138,7 @@ pub(crate) fn paging(layout: &Vec<LayoutTableEntry>) -> Vec<(usize, [u8; 8])> {
 // at well-defined address, we can very roughly create paging entries for the continuo region.
 fn page_code(layout: &Vec<LayoutTableEntry>) -> (VirtAddr, usize) {
     let addr = Page1GiB::align_floor(MIN_TEXT_SEGMENT);
-    let size = Page1GiB::align_ceil(cound_non_sys_size(layout));
+    let size = Page1GiB::align_ceil(count_non_sys_size(layout));
     (VirtAddr::new_truncate(addr), size as usize)
 }
 
@@ -126,7 +149,7 @@ fn page_with_flags(layout: &Vec<LayoutTableEntry>, flags: Flags) -> Option<(Virt
         .and_then(|entry| {
             Some((
                 entry.addr().as_virt_addr(),
-                Page1GiB::align_ceil(entry.size()) as usize,
+                Page1GiB::align_ceil(entry.len() as u64) as usize,
             ))
         })
 }
@@ -182,7 +205,7 @@ pub(super) fn estimate_sys_region(base: &Vec<LayoutTableEntry>) -> Result<Layout
     Ok(LayoutTableEntry::new(
         GUEST_SYSTEM_ADDR(),
         estimate as u32,
-        Flags::PRESENT,
+        Flags::PRESENT | Flags::SYSTEM,
     ))
 }
 
@@ -268,7 +291,7 @@ fn paging_entry(addr: VirtAddr, huge: bool, exec: bool) -> [u8; 8] {
 }
 
 /// count all non-system sections and return the total number of required pages.
-fn cound_non_sys_size(layout: &Vec<LayoutTableEntry>) -> u64 {
+fn count_non_sys_size(layout: &Vec<LayoutTableEntry>) -> u64 {
     let mut size = 0;
     layout.iter().for_each(|entry| {
         if !entry.flags().intersects(Flags::SYSTEM | Flags::STACK) {
@@ -283,6 +306,7 @@ mod test {
     #![allow(unused, dead_code)]
 
     use super::*;
+    use crate::ConfigBuilder;
     use bmvm_common::mem::{Page1GiB, Page2MiB, Page4KiB, PhysAddr};
 
     #[test]
@@ -460,7 +484,9 @@ mod test {
             ),
         ];
 
-        assert_eq!(4, paging(&base).len());
+        let cfg = ConfigBuilder::new().build();
+
+        assert_eq!(4, paging(&cfg, &base).len());
     }
 
     #[test]

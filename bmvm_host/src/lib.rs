@@ -12,6 +12,7 @@ pub use bmvm_common::registry;
 pub use bmvm_macros::expose_guest as expose;
 pub use runtime::*;
 use std::sync::OnceLock;
+pub use vm::{Config, ConfigBuilder};
 
 /// The default stack size for the guest (8MiB)
 pub(crate) const GUEST_DEFAULT_STACK_SIZE: usize = 8 * 1024 * 1024;
@@ -37,3 +38,25 @@ pub(crate) fn GUEST_STACK_ADDR() -> PhysAddr {
 
 static ONCE_GUEST_SYSTEM_ADDR: OnceLock<PhysAddr> = OnceLock::new();
 static ONCE_GUEST_STACK_ADDR: OnceLock<PhysAddr> = OnceLock::new();
+
+mod test {
+    use super::*;
+    use bmvm_common::mem::VirtAddr;
+
+    #[test]
+    fn test_addr() {
+        assert_eq!(
+            GUEST_SYSTEM_ADDR(),
+            PhysAddr::new(1 << (DefaultAddrSpace::bits() - 1))
+        );
+        assert_eq!(
+            GUEST_STACK_ADDR(),
+            PhysAddr::new(align_floor(GUEST_SYSTEM_ADDR().as_u64() - 1))
+        );
+
+        assert_eq!(
+            GUEST_SYSTEM_ADDR().as_virt_addr(),
+            VirtAddr::new(0xFFFF800000000000)
+        )
+    }
+}

@@ -4,18 +4,22 @@ extern crate bmvm_guest;
 
 use core::arch::asm;
 
-fn write(port: u16, value: u8) {
+const IO_PORT: u16 = 0x3f8;
+
+fn write_buf(port: u16, buf: &[u8]) {
     unsafe {
         asm!(
-        "out dx, al",
+        "rep outsb",
         in("dx") port,
-        in("al") value,
+        in("si") buf.as_ptr() as u32,
+        in("cx") buf.len() as u16,
         );
     }
 }
 
 fn main() {
-    write(0x123, 0x80);
+    let buf = b"Hello, From Guest";
+    write_buf(IO_PORT, buf);
 }
 
 #[unsafe(no_mangle)]
