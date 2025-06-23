@@ -270,8 +270,6 @@ impl Vm {
         let entries = setup::paging(&self.cfg, &layout);
         for (idx, entry) in entries.iter() {
             let write_to = start_paging + idx * 8;
-            let v = u64::from_ne_bytes(*entry);
-            log::info!("8PTE at index {idx}, {v:#x}");
             temp_sys_region.write_offset(write_to, entry)?;
         }
 
@@ -299,7 +297,7 @@ impl Vm {
                 entries: 0,
             },
             paging: BMVM_TMP_PAGING.as_virt_addr(),
-            stack: GUEST_STACK_ADDR().as_virt_addr(),
+            stack: GUEST_STACK_ADDR().as_virt_addr() - 1,
             entry: entry_point,
             cpu_id: setup::cpuid()?,
         };

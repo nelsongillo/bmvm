@@ -104,9 +104,10 @@ pub(crate) fn paging(cfg: &Config, layout: &Vec<LayoutTableEntry>) -> Vec<(usize
 
     // entries for the stack
     let (stack, size_stack) = page_with_flags(layout, Flags::STACK).unwrap_or((
-        VirtAddr::new_truncate(Page1GiB::align_floor(GUEST_STACK_ADDR().as_u64())),
+        GUEST_STACK_ADDR().as_virt_addr(),
         Page1GiB::align_ceil(cfg.stack_size.get() as u64) as usize,
     ));
+    let stack = VirtAddr::new_truncate(Page1GiB::align_floor(stack.as_u64()));
     if pml4.insert(stack.p4_index()) {
         pdpt += 512;
         output.push((
