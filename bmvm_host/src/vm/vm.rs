@@ -1,13 +1,13 @@
-use crate::alloc::{Allocator, ReadWrite, Region};
+use crate::alloc::{Allocator, GuestOnly, ReadWrite, Region};
 use crate::elf::ExecBundle;
 use crate::vm::vcpu::Vcpu;
 use crate::vm::{Config, setup, vcpu};
-use crate::{GUEST_STACK_ADDR, GUEST_TMP_SYSTEM_SIZE};
+use crate::{GUEST_STACK_ADDR, GUEST_SYSTEM_ADDR, GUEST_TMP_SYSTEM_SIZE};
 use bmvm_common::cpuid::ADDR_SPACE_FUNC;
 use bmvm_common::error::ExitCode;
 use bmvm_common::mem::{
-    Align, AlignedNonZeroUsize, DefaultAlign, Flags, LayoutTableEntry, PhysAddr, VirtAddr,
-    align_floor,
+    Align, AlignedNonZeroUsize, DefaultAddrSpace, DefaultAlign, Flags, LayoutTableEntry, PhysAddr,
+    VirtAddr, align_floor, virt_to_phys,
 };
 use bmvm_common::{
     BMVM_MEM_LAYOUT_TABLE, BMVM_TMP_GDT, BMVM_TMP_IDT, BMVM_TMP_PAGING, BMVM_TMP_SYS, cpuid,
@@ -93,6 +93,11 @@ impl Vm {
         self.mem_mappings.push(stack);
         exec.layout.push(stack_entry);
 
+        // allocate sys region
+        let (sys, sys_entry) = self.alloc_sys(exec)?;
+        self.mem_mappings.push(sys);
+        exec.layout.push(sys_entry);
+
         // prepare the system region
         let sys = self.setup_long_mode_env(exec)?;
         self.mem_mappings.push(sys);
@@ -131,7 +136,6 @@ impl Vm {
         self.dump_region_to_file(BMVM_TMP_SYS.as_u64(), String::from("dump_layout.bin"))?;
 
         log::info!("Starting VM");
-        log::debug!("stack: {:x}", GUEST_STACK_ADDR().as_virt_addr().as_u64());
 
         let mut buf_1 = Vec::with_capacity(8);
         let mut buf_2 = Vec::with_capacity(8);
@@ -240,6 +244,20 @@ impl Vm {
         Ok((stack, entry))
     }
 
+    // TODO: Move to GuestOnly regio
+    fn alloc_sys(&mut self, exec: &ExecBundle) -> Result<(Region<ReadWrite>, LayoutTableEntry)> {
+        let layout_sys = setup::estimate_sys_region(&exec.layout)?;
+
+        let region = self
+            .manager
+            .alloc_accessible::<ReadWrite>(
+                AlignedNonZeroUsize::new_ceil(layout_sys.size() as usize).unwrap(),
+            )?
+            .set_guest_addr(GUEST_SYSTEM_ADDR());
+
+        Ok((region, layout_sys))
+    }
+
     /// Setting up a minimal environment containing paging structure, IDT and GDT to be able to enter
     /// long mode and start with the actual structure setup by the guest.
     fn setup_long_mode_env(&mut self, exec: &ExecBundle) -> Result<Region<ReadWrite>> {
@@ -249,11 +267,6 @@ impl Vm {
             .manager
             .alloc_accessible::<ReadWrite>(size_tmp_sys)?
             .set_guest_addr(BMVM_TMP_SYS);
-
-        // estimate the system region
-        let mut layout = exec.layout.clone();
-        let layout_sys = setup::estimate_sys_region(&layout)?;
-        layout.insert(0, layout_sys);
 
         // write GDT
         temp_sys_region.write_offset(
@@ -267,7 +280,7 @@ impl Vm {
         )?;
         // write paging
         let start_paging = region_abs_offset(BMVM_TMP_PAGING.as_u64()) as usize;
-        let entries = setup::paging(&self.cfg, &layout);
+        let entries = setup::paging(&self.cfg, &exec.layout);
         for (idx, entry) in entries.iter() {
             let write_to = start_paging + idx * 8;
             temp_sys_region.write_offset(write_to, entry)?;
@@ -275,7 +288,7 @@ impl Vm {
 
         // write layout table
         let start_layout_table = region_abs_offset(BMVM_MEM_LAYOUT_TABLE.as_u64()) as usize;
-        for (idx, entry) in layout.iter().enumerate() {
+        for (idx, entry) in exec.layout.iter().enumerate() {
             let offset = idx * size_of::<LayoutTableEntry>();
             temp_sys_region.write_offset(start_layout_table + offset, &entry.as_array())?;
         }
@@ -337,16 +350,17 @@ impl Vm {
     }
 
     fn dump_region_to_file(&self, addr: u64, name: String) -> Result<()> {
+        let paddr = virt_to_phys::<DefaultAddrSpace>(unsafe { VirtAddr::new_unsafe(addr) });
         for r in self.mem_mappings.iter() {
             let guest_addr = r.guest_addr().as_u64();
             let size = r.capacity();
-            if (guest_addr..(guest_addr + size as u64)).contains(&addr) {
+            if (guest_addr..(guest_addr + size as u64)).contains(&paddr.as_u64()) {
                 let mut file = std::fs::File::create(name).unwrap();
                 file.write_all(r.as_ref()).unwrap();
                 return Ok(());
             }
         }
 
-        Err(Error::VmMemoryMappingNotFound(PhysAddr::new(addr)))
+        Err(Error::VmMemoryMappingNotFound(paddr))
     }
 }

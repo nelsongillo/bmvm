@@ -314,6 +314,7 @@ impl Allocator {
         self.mmap::<P>(capacity)
     }
 
+    // FIXME: flags.contains(PROT_NONE) may not properly work
     fn allocate<P: Perm>(
         &self,
         capacity: AlignedNonZeroUsize,

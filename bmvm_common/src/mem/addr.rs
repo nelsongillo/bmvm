@@ -193,6 +193,15 @@ impl<B: AddrSpace> TryFrom<u64> for PhysAddr<B> {
     }
 }
 
+pub fn virt_to_phys<B: AddrSpace>(vaddr: VirtAddr) -> PhysAddr<B> {
+    let raw = vaddr.as_u64();
+    if raw & 1 << (48 - 1) == 0 {
+        PhysAddr::new(raw)
+    } else {
+        PhysAddr::new((raw & ((1 << 48) - 1)) >> (48 - B::bits()))
+    }
+}
+
 mod tests {
     #![allow(unused)]
     use super::*;
@@ -234,5 +243,15 @@ mod tests {
         let phys: PhysAddr<AddrSpace39> = PhysAddr::new(0x3000000123);
         let virt = phys.as_virt_addr();
         assert_eq!(virt.as_u64(), phys.as_u64());
+    }
+
+    #[test]
+    fn virt_to_phys_test() {
+        // mask and shift
+        let virt = unsafe { VirtAddr::new_unsafe(0xffff800000024600) };
+        assert_eq!(virt_to_phys::<AddrSpace39>(virt).as_u64(), 0x4000000123);
+
+        let virt = unsafe { VirtAddr::new_unsafe(0x3000000123) };
+        assert_eq!(virt_to_phys::<AddrSpace39>(virt).as_u64(), 0x3000000123);
     }
 }

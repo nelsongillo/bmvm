@@ -1,8 +1,8 @@
 use crate::{Config, GUEST_STACK_ADDR, GUEST_SYSTEM_ADDR, MIN_TEXT_SEGMENT};
 use bmvm_common::cpuid::ADDR_SPACE_FUNC;
 use bmvm_common::mem::{
-    Align, DefaultAlign, Flags, LayoutTableEntry, Page1GiB, Page2MiB, Page4KiB, VirtAddr,
-    align_ceil, aligned_and_fits,
+    Align, DefaultAddrSpace, DefaultAlign, Flags, LayoutTableEntry, Page1GiB, Page2MiB, Page4KiB,
+    PhysAddr, VirtAddr, align_ceil, aligned_and_fits, virt_to_phys,
 };
 use bmvm_common::{BMVM_TMP_PAGING, cpuid};
 use kvm_bindings::{CpuId, kvm_cpuid_entry2};
@@ -119,9 +119,11 @@ pub(crate) fn paging(cfg: &Config, layout: &Vec<LayoutTableEntry>) -> Vec<(usize
 
     // entries for the system region
     let (sys, size_sys) = page_with_flags(&layout, Flags::SYSTEM).unwrap_or((
-        GUEST_SYSTEM_ADDR().as_virt_addr(),
+        // GUEST_SYSTEM_ADDR().as_virt_addr(),
+        VirtAddr::new(0),
         Page1GiB::ALIGNMENT as usize,
     ));
+    let sys = VirtAddr::new_truncate(Page1GiB::align_floor(sys.as_u64()));
     if pml4.insert(sys.p4_index()) {
         pdpt += 512;
         output.push((
@@ -278,7 +280,7 @@ const fn gdt_entry(base: u64, limit: u64, access_byte: u8, flags: u8) -> [u8; GD
 fn paging_entry(addr: VirtAddr, huge: bool, exec: bool) -> [u8; 8] {
     assert!(Page4KiB::is_aligned(addr.as_u64()));
     let mut value: u64 = PAGE_FLAG_PRESENT | PAGE_FLAG_WRITE;
-    value |= addr.as_u64() & 0xFFFF_FFFF_FFFF_F000;
+    value |= virt_to_phys::<DefaultAddrSpace>(addr).as_u64() & 0xFFFF_FFFF_FFFF_F000;
 
     if huge {
         value |= PAGE_FLAG_HUGE
