@@ -1,46 +1,35 @@
 # Outline
 
 ## Introduction
-
 * Problem statement
 * thesis structure
 
-## Related Works
+# Background + Related Work
+* Virtualization types
+* ELF -> ELKVM
+* WASM -> Hyperlight WASM
 
-* (Hyperlight) WASM
-* ELFVM
-
-## Requirements
-
-### Standalone VM
-
-* Requirements on CPU side (Longmode -> Paging, IDT, GDT)
-* Guest-Host Calls
-* Host-Guest Calls
-
-### Edgeless-Runtime
+## Design
+* Problem Statement and Requirements
+### Architecture on component level 
+### VM initializaiton
+* Longmode setup (Host vs Guest)
+* ELF loading (Host vs Guest)
+### Function Calling
+* Linking
+* Host to Guest (Blocking/Interrupt)
+* Guest to Host
 
 ## Implementation
+* VM initialization
+* Linking
 
-### Standalone VM
+## Benchmarks
+* bootup time
+* different configs (eg msg size, function parameter size, ..)
+* execution heavy workloads (comparison with WASM)
+* IO heavy workloads (comparison with WASM)
 
-#### Guest
-
-* Guest-Host Calls
-
-#### Host
-
-* Longmode Setup
-* Linking Host-Guest Calls
-
-### Integration in Edgeless
-
-## Benchmarks: Design
-
-* eg hello world bootup time (WASM vs BMVM vs Docker)
-
-## Results
-
-## Limitatons
-
+## Limitations
+## Future Works
 ## Conclusion
