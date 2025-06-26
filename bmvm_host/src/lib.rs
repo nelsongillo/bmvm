@@ -1,3 +1,5 @@
+#![feature(new_range_api)]
+
 mod alloc;
 mod elf;
 mod linker;

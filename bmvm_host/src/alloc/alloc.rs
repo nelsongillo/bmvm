@@ -5,6 +5,7 @@ use kvm_bindings::kvm_create_guest_memfd;
 use kvm_ioctls::{Cap, VmFd};
 use nix::sys::mman::{MapFlags, ProtFlags, mmap_anonymous};
 use std::cmp::min;
+use std::ops::Range;
 use std::os::fd::RawFd;
 use std::panic;
 use std::ptr::NonNull;
@@ -41,6 +42,135 @@ enum Storage {}
 enum StorageBackend {
     Mmap(NonNull<u8>),
     GuestMem(RawFd),
+}
+
+pub struct RegionCollection {
+    inner: Vec<(Range<usize>, RegionEntry)>,
+}
+
+pub enum RegionEntry {
+    ReadOnly(Region<ReadOnly, DefaultAlign>),
+    WriteOnly(Region<WriteOnly, DefaultAlign>),
+    ReadWrite(Region<ReadWrite, DefaultAlign>),
+    GuestOnly(Region<GuestOnly, DefaultAlign>),
+}
+
+impl RegionEntry {
+    pub fn addr(&self) -> PhysAddr {
+        match self {
+            RegionEntry::ReadOnly(r) => r.guest_addr(),
+            RegionEntry::WriteOnly(r) => r.guest_addr(),
+            RegionEntry::ReadWrite(r) => r.guest_addr(),
+            RegionEntry::GuestOnly(r) => r.guest_addr(),
+        }
+    }
+
+    pub fn as_ptr(&self) -> *const u8 {
+        match self {
+            RegionEntry::ReadOnly(r) => r.as_ptr(),
+            RegionEntry::WriteOnly(r) => r.as_ptr(),
+            RegionEntry::ReadWrite(r) => r.as_ptr(),
+            RegionEntry::GuestOnly(r) => r.as_ptr(),
+        }
+    }
+
+    pub fn capacity(&self) -> usize {
+        match self {
+            RegionEntry::ReadOnly(r) => r.capacity,
+            RegionEntry::WriteOnly(r) => r.capacity,
+            RegionEntry::ReadWrite(r) => r.capacity,
+            RegionEntry::GuestOnly(r) => r.capacity,
+        }
+    }
+
+    pub fn as_ref(&self) -> Option<&[u8]> {
+        match self {
+            RegionEntry::ReadOnly(r) => Some(r.as_ref()),
+            RegionEntry::ReadWrite(r) => Some(r.as_ref()),
+            _ => None,
+        }
+    }
+
+    pub fn readable(&self) -> bool {
+        match self {
+            RegionEntry::ReadOnly(_) | RegionEntry::ReadWrite(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn writeable(&self) -> bool {
+        match self {
+            RegionEntry::WriteOnly(_) | RegionEntry::ReadWrite(_) => true,
+            _ => false,
+        }
+    }
+}
+
+impl RegionCollection {
+    pub fn new() -> Self {
+        Self { inner: Vec::new() }
+    }
+
+    pub fn push<P, A>(&mut self, region: Region<P, A>)
+    where
+        P: Perm,
+        A: Align,
+        Region<P, A>: Into<RegionEntry>,
+    {
+        let range =
+            region.guest_addr().as_usize()..(region.guest_addr().as_usize() + region.capacity());
+        self.inner.push((range, region.into()));
+    }
+
+    pub fn get(&self, addr: PhysAddr) -> Option<&RegionEntry> {
+        self.inner
+            .iter()
+            .find(|(range, _)| range.contains(&addr.as_usize()))
+            .map(|(_, region)| region)
+    }
+
+    pub fn append(&mut self, other: &mut Self) {
+        self.inner.append(&mut other.inner);
+    }
+
+    pub fn as_vec(&self) -> &Vec<(Range<usize>, RegionEntry)> {
+        &self.inner
+    }
+
+    pub fn iter(&self) -> RegionCollectionIter<'_> {
+        RegionCollectionIter::new(self)
+    }
+}
+
+impl IntoIterator for RegionCollection {
+    type Item = RegionEntry;
+    type IntoIter = std::iter::Map<
+        std::vec::IntoIter<(Range<usize>, RegionEntry)>,
+        fn((Range<usize>, RegionEntry)) -> RegionEntry,
+    >;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.into_iter().map(|(_, e)| e)
+    }
+}
+
+pub struct RegionCollectionIter<'a> {
+    inner: slice::Iter<'a, (Range<usize>, RegionEntry)>,
+}
+
+impl<'a> RegionCollectionIter<'a> {
+    fn new(collection: &'a RegionCollection) -> Self {
+        Self {
+            inner: collection.inner.iter(),
+        }
+    }
+}
+
+impl<'a> Iterator for RegionCollectionIter<'a> {
+    type Item = &'a RegionEntry;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|(_, e)| e)
+    }
 }
 
 /// This represents a memory region on host, where no guest physical address is set, therefore it
@@ -282,6 +412,30 @@ impl_write_offset!(ProtoRegion => WriteOnly, ReadWrite);
 impl_as_mut!(Region => WriteOnly, ReadWrite);
 impl_write_offset!(Region => WriteOnly, ReadWrite);
 impl_write_addr!(Region => WriteOnly, ReadWrite);
+
+impl Into<RegionEntry> for Region<ReadOnly> {
+    fn into(self) -> RegionEntry {
+        RegionEntry::ReadOnly(self)
+    }
+}
+
+impl Into<RegionEntry> for Region<WriteOnly> {
+    fn into(self) -> RegionEntry {
+        RegionEntry::WriteOnly(self)
+    }
+}
+
+impl Into<RegionEntry> for Region<ReadWrite> {
+    fn into(self) -> RegionEntry {
+        RegionEntry::ReadWrite(self)
+    }
+}
+
+impl Into<RegionEntry> for Region<GuestOnly> {
+    fn into(self) -> RegionEntry {
+        RegionEntry::GuestOnly(self)
+    }
+}
 
 pub struct Allocator {
     m_flags: MapFlags,

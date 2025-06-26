@@ -1,4 +1,4 @@
-use crate::alloc::{Allocator, GuestOnly, ReadWrite, Region};
+use crate::alloc::{Allocator, GuestOnly, ReadWrite, Region, RegionCollection};
 use crate::elf::ExecBundle;
 use crate::vm::vcpu::Vcpu;
 use crate::vm::{Config, setup, vcpu};
@@ -34,6 +34,8 @@ pub enum Error {
     Vm(kvm_ioctls::Error),
     #[error("Memory mapping not found: {0:?}")]
     VmMemoryMappingNotFound(PhysAddr),
+    #[error("Memory mapping is not readable: {0:?}")]
+    VmMemoryMappingNotReadable(PhysAddr),
     #[error("Memory request exceeds max memory: {0}")]
     VmMemoryRequestExceedsMaxMemory(u64),
     #[error("VCPU error: {0:?}")]
@@ -50,7 +52,7 @@ pub struct Vm {
     vm: VmFd,
     vcpu: Vcpu,
     manager: Allocator,
-    mem_mappings: Vec<Region<ReadWrite>>,
+    mem_mappings: RegionCollection,
 }
 
 impl Vm {
@@ -82,7 +84,7 @@ impl Vm {
             vm,
             vcpu,
             manager,
-            mem_mappings: Vec::new(),
+            mem_mappings: RegionCollection::new(),
         })
     }
 
@@ -114,7 +116,7 @@ impl Vm {
                 let mapping = kvm_userspace_memory_region {
                     slot: slot as u32,
                     flags: 0,
-                    guest_phys_addr: r.guest_addr().as_u64(),
+                    guest_phys_addr: r.addr().as_u64(),
                     memory_size: r.capacity() as u64,
                     userspace_addr: r.as_ptr() as u64,
                 };
@@ -351,16 +353,17 @@ impl Vm {
 
     fn dump_region_to_file(&self, addr: u64, name: String) -> Result<()> {
         let paddr = virt_to_phys::<DefaultAddrSpace>(unsafe { VirtAddr::new_unsafe(addr) });
-        for r in self.mem_mappings.iter() {
-            let guest_addr = r.guest_addr().as_u64();
-            let size = r.capacity();
-            if (guest_addr..(guest_addr + size as u64)).contains(&paddr.as_u64()) {
-                let mut file = std::fs::File::create(name).unwrap();
-                file.write_all(r.as_ref()).unwrap();
-                return Ok(());
+        if let Some(r) = self.mem_mappings.get(paddr) {
+            match r.as_ref() {
+                Some(reference) => {
+                    let mut file = std::fs::File::create(name).unwrap();
+                    file.write_all(reference).unwrap();
+                    Ok(())
+                }
+                None => Err(Error::VmMemoryMappingNotReadable(paddr)),
             }
+        } else {
+            Err(Error::VmMemoryMappingNotFound(paddr))
         }
-
-        Err(Error::VmMemoryMappingNotFound(paddr))
     }
 }

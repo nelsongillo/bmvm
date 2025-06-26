@@ -81,7 +81,7 @@ impl AsRef<[u8]> for Buffer {
 
 pub struct ExecBundle {
     pub(crate) entry: PhysAddr,
-    pub(crate) mem_regions: Vec<Region<ReadWrite>>,
+    pub(crate) mem_regions: RegionCollection,
     pub(crate) layout: Vec<LayoutTableEntry>,
     // pub calls: Vec<CallMeta>,
 }
@@ -105,7 +105,7 @@ impl ExecBundle {
         let entry =
             PhysAddr::try_from(elf.entry).map_err(|_| Error::InvalidEntryPoint(elf.entry))?;
         let mut layout = Vec::new();
-        let mut mem_regions = Vec::new();
+        let mut mem_regions = RegionCollection::new();
 
         // | code | data | heap | ...
         // iterate through all PH_LOAD header and build buffer
