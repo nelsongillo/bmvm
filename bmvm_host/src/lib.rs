@@ -41,6 +41,7 @@ pub(crate) fn GUEST_STACK_ADDR() -> PhysAddr {
 static ONCE_GUEST_SYSTEM_ADDR: OnceLock<PhysAddr> = OnceLock::new();
 static ONCE_GUEST_STACK_ADDR: OnceLock<PhysAddr> = OnceLock::new();
 
+#[allow(unused_imports)]
 mod test {
     use super::*;
     use bmvm_common::mem::VirtAddr;

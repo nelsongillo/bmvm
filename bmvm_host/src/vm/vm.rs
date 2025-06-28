@@ -1,22 +1,18 @@
-use crate::alloc::{Allocator, GuestOnly, ReadWrite, Region, RegionCollection};
+use crate::alloc::{Allocator, ReadWrite, Region, RegionCollection};
 use crate::elf::ExecBundle;
 use crate::vm::vcpu::Vcpu;
 use crate::vm::{Config, setup, vcpu};
 use crate::{GUEST_STACK_ADDR, GUEST_SYSTEM_ADDR, GUEST_TMP_SYSTEM_SIZE};
-use bmvm_common::cpuid::ADDR_SPACE_FUNC;
 use bmvm_common::error::ExitCode;
 use bmvm_common::mem::{
     Align, AlignedNonZeroUsize, DefaultAddrSpace, DefaultAlign, Flags, LayoutTableEntry, PhysAddr,
     VirtAddr, align_floor, virt_to_phys,
 };
 use bmvm_common::{
-    BMVM_MEM_LAYOUT_TABLE, BMVM_TMP_GDT, BMVM_TMP_IDT, BMVM_TMP_PAGING, BMVM_TMP_SYS, cpuid,
+    BMVM_MEM_LAYOUT_TABLE, BMVM_TMP_GDT, BMVM_TMP_IDT, BMVM_TMP_PAGING, BMVM_TMP_SYS,
     region_abs_offset,
 };
-use kvm_bindings::{
-    __IncompleteArrayField, CpuId, KVM_API_VERSION, KVM_MAX_CPUID_ENTRIES, kvm_cpuid_entry2,
-    kvm_cpuid2, kvm_userspace_memory_region,
-};
+use kvm_bindings::KVM_API_VERSION;
 use kvm_ioctls::{Cap, Kvm, VcpuExit, VmFd};
 use std::io::Write;
 
@@ -110,20 +106,9 @@ impl Vm {
         // setup the vcpu for execution
         self.setup_cpu(exec.entry.as_virt_addr())?;
 
-        unsafe {
-            // map all regions to the guest
-            for (slot, r) in self.mem_mappings.iter().enumerate() {
-                let mapping = kvm_userspace_memory_region {
-                    slot: slot as u32,
-                    flags: 0,
-                    guest_phys_addr: r.addr().as_u64(),
-                    memory_size: r.capacity() as u64,
-                    userspace_addr: r.as_ptr() as u64,
-                };
-                self.vm
-                    .set_user_memory_region(mapping)
-                    .map_err(|e| Error::Vm(e))?;
-            }
+        // map all regions to the guest
+        for (slot, r) in self.mem_mappings.iter_mut().enumerate() {
+            r.set_as_guest_memory(&self.vm, slot as u32)?
         }
 
         if self.cfg.debug {
@@ -364,6 +349,17 @@ impl Vm {
             }
         } else {
             Err(Error::VmMemoryMappingNotFound(paddr))
+        }
+    }
+}
+
+impl Drop for Vm {
+    fn drop(&mut self) {
+        for entry in self.mem_mappings.iter_mut() {
+            match entry.remove_from_guest_memory(&self.vm) {
+                Ok(_) => (),
+                Err(err) => log::warn!("Failed to remove from guest memory: {}", err),
+            }
         }
     }
 }

@@ -83,9 +83,9 @@ pub struct Vcpu {
 // -------------------------------------------------------------------------------------------------
 impl Vcpu {
     pub(crate) fn new(vm: &VmFd, id: u64) -> Result<Self> {
-        let inner = vm.create_vcpu(id).map_err(|e| Error::CreateVcpu(e))?;
-        let regs = inner.get_regs().map_err(|e| Error::GetRegs(e))?;
-        let sregs = inner.get_sregs().map_err(|e| Error::GetSregs(e))?;
+        let inner = vm.create_vcpu(id).map_err(Error::CreateVcpu)?;
+        let regs = inner.get_regs().map_err(Error::GetRegs)?;
+        let sregs = inner.get_sregs().map_err(Error::GetSregs)?;
         Ok(Self {
             inner,
             regs: Dirty::new(regs),
@@ -122,14 +122,14 @@ impl Vcpu {
 
     #[inline]
     fn fetch_regs(&mut self) -> Result<()> {
-        let regs = self.inner.get_regs().map_err(|e| Error::GetRegs(e))?;
+        let regs = self.inner.get_regs().map_err(Error::GetRegs)?;
         self.regs.set(regs);
         Ok(())
     }
 
     #[inline]
     fn fetch_sregs(&mut self) -> Result<()> {
-        let sregs = self.inner.get_sregs().map_err(|e| Error::GetSregs(e))?;
+        let sregs = self.inner.get_sregs().map_err(Error::GetSregs)?;
         self.sregs.set(sregs);
         Ok(())
     }
@@ -137,14 +137,14 @@ impl Vcpu {
     #[inline]
     fn propagate_regs(&mut self) -> Result<()> {
         self.regs
-            .sync(|regs| self.inner.set_regs(regs).map_err(|e| Error::SetRegs(e)))
+            .sync(|regs| self.inner.set_regs(regs).map_err(Error::SetRegs))
             .unwrap_or(Result::<()>::Ok(()))
     }
 
     #[inline]
     fn propagate_sregs(&mut self) -> Result<()> {
         self.sregs
-            .sync(|sregs| self.inner.set_sregs(sregs).map_err(|e| Error::SetSregs(e)))
+            .sync(|sregs| self.inner.set_sregs(sregs).map_err(Error::SetSregs))
             .unwrap_or(Result::<()>::Ok(()))
     }
 }
@@ -165,9 +165,7 @@ impl Vcpu {
 
     /// set up the CPUID functions supported by the vcpu in guest mode
     fn setup_cpuid(&mut self, cpu_id: &CpuId) -> Result<()> {
-        self.inner
-            .set_cpuid2(cpu_id)
-            .map_err(|e| Error::SetCpuID(e))
+        self.inner.set_cpuid2(cpu_id).map_err(Error::SetCpuID)
     }
 
     /// set up the Global Descriptor Table pointer and related segments
@@ -262,7 +260,7 @@ impl Vcpu {
         };
         self.inner
             .set_guest_debug(&dbg)
-            .map_err(|e| Error::SetGuestDebug(e))?;
+            .map_err(Error::SetGuestDebug)?;
 
         self.regs.mutate(|regs| {
             regs.rflags |= 1 << 8;
@@ -277,7 +275,7 @@ impl Vcpu {
         self.propagate_regs()?;
         self.propagate_sregs()?;
 
-        let exit = self.inner.run().map_err(|e| Error::Run(e));
+        let exit = self.inner.run().map_err(Error::Run);
         self.recent_exec = true;
         exit
     }

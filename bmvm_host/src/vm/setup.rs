@@ -2,7 +2,7 @@ use crate::{Config, GUEST_STACK_ADDR, GUEST_SYSTEM_ADDR, MIN_TEXT_SEGMENT};
 use bmvm_common::cpuid::ADDR_SPACE_FUNC;
 use bmvm_common::mem::{
     Align, DefaultAddrSpace, DefaultAlign, Flags, LayoutTableEntry, Page1GiB, Page2MiB, Page4KiB,
-    PhysAddr, VirtAddr, align_ceil, aligned_and_fits, virt_to_phys,
+    VirtAddr, align_ceil, aligned_and_fits, virt_to_phys,
 };
 use bmvm_common::{BMVM_TMP_PAGING, cpuid};
 use kvm_bindings::{CpuId, kvm_cpuid_entry2};

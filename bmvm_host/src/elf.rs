@@ -5,7 +5,7 @@ use bmvm_common::mem::{
     align_ceil, align_floor,
 };
 use goblin::elf;
-use goblin::elf::{Elf, Header, ProgramHeader};
+use goblin::elf::{Elf, ProgramHeader};
 use goblin::elf32::header::machine_to_str;
 use std::fmt::Debug;
 use std::fs;
@@ -50,7 +50,7 @@ pub enum Error {
     ElfParse(#[from] goblin::error::Error),
 
     #[error("{0}")]
-    Alloc(#[from] alloc::Error),
+    Alloc(#[from] region::Error),
 
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
@@ -237,13 +237,10 @@ fn check_minimal_file_requirements<P: AsRef<Path>>(path: P) -> Result<()> {
 }
 
 fn check_platform_supported<B: AsRef<[u8]>>(buf: B) -> Result<()> {
-    let header: Header;
-    match Elf::parse_header(buf.as_ref()) {
-        Ok(result) => {
-            header = result;
-        }
+    let header = match Elf::parse_header(buf.as_ref()) {
+        Ok(header) => header,
         Err(err) => return Err(Error::ElfParse(err)),
-    }
+    };
 
     if !SUPPORTED_PLATFORMS.contains(&header.e_machine) {
         return Err(Error::UnsupportedPlatform(machine_to_str(header.e_machine)));
