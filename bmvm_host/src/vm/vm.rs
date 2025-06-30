@@ -299,7 +299,7 @@ impl Vm {
             paging: BMVM_TMP_PAGING.as_virt_addr(),
             stack: GUEST_STACK_ADDR().as_virt_addr() - 1,
             entry: entry_point,
-            cpu_id: setup::cpuid()?,
+            cpu_id: setup::cpuid(&self.kvm)?,
         };
 
         self.vcpu.setup(&setup).map_err(|e| Error::Vcpu(e))

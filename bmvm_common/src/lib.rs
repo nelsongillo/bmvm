@@ -7,11 +7,9 @@ extern crate core;
 
 use crate::mem::PhysAddr;
 
+pub mod error;
 pub mod hash;
 pub mod interprete;
-
-pub mod cpuid;
-pub mod error;
 pub mod mem;
 #[cfg(feature = "std")]
 pub mod meta;

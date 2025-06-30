@@ -1,11 +1,11 @@
 use crate::{Config, GUEST_STACK_ADDR, GUEST_SYSTEM_ADDR, MIN_TEXT_SEGMENT};
-use bmvm_common::cpuid::ADDR_SPACE_FUNC;
+use bmvm_common::BMVM_TMP_PAGING;
 use bmvm_common::mem::{
     Align, DefaultAddrSpace, DefaultAlign, Flags, LayoutTableEntry, Page1GiB, Page2MiB, Page4KiB,
     VirtAddr, align_ceil, aligned_and_fits, virt_to_phys,
 };
-use bmvm_common::{BMVM_TMP_PAGING, cpuid};
-use kvm_bindings::{CpuId, kvm_cpuid_entry2};
+use kvm_bindings::{CpuId, KVM_MAX_CPUID_ENTRIES};
+use kvm_ioctls::Kvm;
 use std::collections::HashSet;
 
 // Values used for system region requirement estimation
@@ -36,23 +36,10 @@ pub enum Error {
     CpuID,
 }
 
-pub(crate) fn cpuid() -> Result<CpuId> {
+pub(crate) fn cpuid(kvm: &Kvm) -> Result<CpuId> {
     // setup vcpu cpuid
-    let mut supported_cpuid_funcs: CpuId = CpuId::new(1).map_err(|_| Error::CpuID)?;
-    let (eax, ebx) = cpuid::cpuid_addr_space();
-    supported_cpuid_funcs
-        .push(kvm_cpuid_entry2 {
-            function: ADDR_SPACE_FUNC,
-            index: 0,
-            flags: 0,
-            eax,
-            ebx,
-            ecx: 0,
-            edx: 0,
-            padding: [0; 3usize],
-        })
-        .map_err(|_| Error::CpuID)?;
-    Ok(supported_cpuid_funcs)
+    kvm.get_supported_cpuid(KVM_MAX_CPUID_ENTRIES)
+        .map_err(|_| Error::CpuID)
 }
 
 /// Initializes a new Interrupt Descriptor Table (IDT).
