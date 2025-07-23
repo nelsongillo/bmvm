@@ -4,7 +4,7 @@ use crate::util::{find_crate, is_reference_type, suffix};
 use bmvm_common::{BMVM_META_SECTION_EXPOSE, BMVM_META_SECTION_EXPOSE_CALLS};
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
-use quote::{ToTokens, format_ident, quote};
+use quote::{format_ident, quote};
 use syn::spanned::Spanned;
 use syn::{
     Error, FnArg, Ident, ItemFn, Pat, PatType, Type, WherePredicate, parse_macro_input, parse_quote,
@@ -16,10 +16,11 @@ type StructFields = Vec<TokenStream2>;
 type WherePreds = Vec<WherePredicate>;
 type ParamUnpacking = Vec<TokenStream2>;
 
-/// A procedural macro that:
-/// 1. Checks that all function parameters implement either Type or Serializable trait
-/// 2. Creates a C-compatible struct (with repr(C)) containing all parameters
-/// 3. Generates a wrapper function that takes the struct, unpacks it, and calls the original function
+/// Procedural macro implementation:
+/// * Checks that all function parameters implement TypeHash and return type implements OwnedShareable trait
+/// * Creates a C-compatible struct (with repr(C)) containing all parameters
+/// * Generates a wrapper function that takes the struct, unpacks it, and calls the original function
+/// * Create an entry in the distributed slice of exposed function calls
 pub fn expose_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // Parse the function
     let input_fn = parse_macro_input!(item as ItemFn);
@@ -63,7 +64,7 @@ pub fn expose_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     // construct the function and struct names
-    let (wrapper_fn_name, struct_name, static_ptr_name, static_upcall) =
+    let (wrapper_fn_name, struct_name, static_upcall) =
         construct_idents(fn_name, suffix().as_str());
 
     let params_from_ptr = if params.is_empty() {
@@ -116,17 +117,11 @@ pub fn expose_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
     .into()
 }
 
-fn construct_idents(fn_name: &Ident, suffix: &str) -> (Ident, Ident, Ident, Ident) {
+fn construct_idents(fn_name: &Ident, suffix: &str) -> (Ident, Ident, Ident) {
     let wrapper_fn_name = format_ident!("{}_bmvm_wrapper_{}", fn_name, suffix);
     let struct_name = format_ident!("{}BMVMWrapper{}", fn_name, suffix);
-    let static_ptr_name = format_ident!("PTR_BMVM_FN_WRAPPER_{}", suffix);
     let static_upcall_name = format_ident!("UPCALL_FN_WRAPPER_{}", suffix);
-    (
-        wrapper_fn_name,
-        struct_name,
-        static_ptr_name,
-        static_upcall_name,
-    )
+    (wrapper_fn_name, struct_name, static_upcall_name)
 }
 
 /// Extract the function parameters and their types

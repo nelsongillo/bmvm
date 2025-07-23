@@ -10,10 +10,6 @@ use syn::Error;
 use syn::spanned::Spanned;
 use syn::{ForeignItem, ForeignItemFn, ItemForeignMod, parse_macro_input};
 
-const STATIC_META: &str = "BMVM_CALL_META_";
-const STATIC_META_TUPLE: &str = "BMVM_CALL_META_TUPLE_";
-const STATIC_META_SIG: &str = "BMVM_CALL_META_SIG_";
-
 pub fn host_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // Parse the input as a foreign module (extern block)
     let foreign_mod = parse_macro_input!(item as ItemForeignMod);
@@ -114,80 +110,3 @@ fn gen_stub(func: &ForeignItemFn, fn_sig_ident: Ident) -> anyhow::Result<proc_ma
         }
     })
 }
-/*
-
-/// gen_callmeta generates the static data to be embedded in the executable
-fn gen_callmeta(func: &ForeignItemFn) -> anyhow::Result<(proc_macro2::TokenStream, Ident)> {
-    let (meta, params, return_type) = crate_vmi_call(func)?;
-    let fn_name = get_link_name(&func.attrs).unwrap_or_else(|| func.sig.ident.to_string());
-    let meta_name_tuple = format_ident!("{}{}", STATIC_META_TUPLE, fn_name.to_uppercase());
-    let meta_name_sig = format_ident!("{}{}", STATIC_META_SIG, fn_name.to_uppercase());
-    let meta_name = format_ident!("{}{}", STATIC_META, fn_name.to_uppercase());
-
-    // Get the CallMeta as bytes and prefix with the size (u16)
-    let bytes = meta.to_bytes();
-    let meta_size = bytes.len();
-    let (sig_seed_bytes, suffix) = bytes.split_at(8);
-    let suffix_size = suffix.len();
-    let sig_seed = u64::from_ne_bytes(sig_seed_bytes[0..8].try_into()?);
-
-    // construct fully qualified name for Djb2 and TypeHash for use in the macro output
-    let crate_bmvm = find_crate("bmvm-guest")?;
-    let type_djb2 = quote! {#crate_bmvm::Djb2};
-    let type_typehash = quote! {#crate_bmvm::TypeHash};
-
-    // Convert each string to a syn::Type and quote the hashing line
-    let mut hash_lines = params
-        .iter()
-        .map(|ty| {
-            quote! {
-                hasher.write(&<#ty as #type_typehash>::TYPE_HASH.to_ne_bytes());
-            }
-        })
-        .collect::<Vec<_>>();
-    hash_lines.push(quote! {
-        hasher.write(&<#return_type as #type_typehash>::TYPE_HASH.to_ne_bytes());
-    });
-
-    // The FnCall signature is stored in the first 8 bytes of the FnCall data. At the moment it is
-    // only a partial signature, as the type hashes are not yet known and cannot be included on
-    // macro expansion.
-    // From the initial (partial) signature, create a new hasher instance and apply the remaining
-    // type hashes to it. This will produce the final signature hash.
-    // To generate the final output, the signature hash is converted to bytes and replaces the
-    // partial signatures bytes in the FnCall data.
-    let token = quote! {
-        #[used]
-        static #meta_name_tuple: ([u8; #meta_size], u64) = {
-            let mut hasher = #type_djb2::from_partial(#sig_seed);
-            #(#hash_lines)*
-            let sig = hasher.finish();
-            let sig_bytes = sig.to_ne_bytes();
-            let meta_suffix = [#(#suffix),*];
-
-            let mut out = [0u8; #meta_size];
-            let mut i = 0;
-            while i < 8 {
-                out[i] = sig_bytes[i];
-                i += 1;
-            }
-            let mut j = 0;
-            while j < #suffix_size {
-                out[i + j] = meta_suffix[j];
-                j += 1;
-            }
-
-            (out, sig)
-        };
-
-        #[used]
-        #[unsafe(link_section = #BMVM_META_SECTION_HOST)]
-        static #meta_name: [u8; #meta_size] = #meta_name_tuple.0;
-
-        #[used]
-        static #meta_name_sig: u64 = #meta_name_tuple.1;
-    };
-
-    Ok((token, Ident::new(&fn_name, func.span())))
-}
-*/

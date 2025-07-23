@@ -1,6 +1,7 @@
 use core::convert::TryFrom;
 use core::result::Result;
 use sealed::sealed;
+use crate::vmi::Signature;
 
 pub const META_PREFIX_HOST: &str = "BMVM_CALL_HOST_META_";
 pub const META_PREFIX_GUEST: &str = "BMVM_CALL_GUEST_META_";
@@ -111,8 +112,7 @@ pub enum CallDirection {
 }
 
 pub struct CrossFunction {
-    id: FuncId,
-    // name: String,
+    sig: Signature,
     call_direction: CallDirection,
     func: FnCrossCall,
 }

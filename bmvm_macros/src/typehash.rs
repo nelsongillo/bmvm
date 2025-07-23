@@ -96,22 +96,6 @@ pub fn derive_type_hash_impl(input: TokenStream) -> TokenStream {
     .into()
 }
 
-/// validate either #[repr(C)] or #[repr(transparent)]
-fn has_valid_repr(input: &DeriveInput) -> bool {
-    input.attrs.iter().any(|attr| {
-        if attr.path().is_ident("repr") {
-            attr.parse_args_with(
-                syn::punctuated::Punctuated::<syn::Ident, syn::Token![,]>::parse_terminated,
-            )
-            .map_or(false, |args| {
-                args.iter().any(|arg| arg == "C" || arg == "transparent")
-            })
-        } else {
-            false
-        }
-    })
-}
-
 /// parse the repr attribute
 fn parse_repr(input: &DeriveInput) -> Repr {
     for attr in input.attrs.iter() {

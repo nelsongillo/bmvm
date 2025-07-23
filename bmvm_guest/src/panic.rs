@@ -29,7 +29,6 @@ pub fn panic_with_code(code: ExitCode) {
 /// Stop the execution
 pub fn halt() -> ! {
     exit_with_code(ExitCode::Normal);
-    loop {}
 }
 
 /// Write additional values to registers before VM exit.

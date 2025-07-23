@@ -114,7 +114,7 @@ pub(crate) fn create_fn_call(
     }
 
     // return type conversion
-    let (rt, rt_str) = match &sig.output {
+    let (rt, _rt_str) = match &sig.output {
         syn::ReturnType::Default => (parse_str::<Type>("()")?, None),
         syn::ReturnType::Type(_, ty) => (*ty.clone(), Some(supported_type_string(&ty)?)),
     };
@@ -127,7 +127,7 @@ pub(crate) fn create_fn_call(
         all(feature = "vmi-debug", not(feature = "vmi-no-debug")),
         feature = "vmi-consume",
     ))]
-    let call = FnCall::new(init_sig, fn_name, &params_str, rt_str)
+    let call = FnCall::new(init_sig, fn_name, &params_str, _rt_str)
         .map_err(|e| Error::new(sig.span(), format!("Failed to create FnCall: {}", e)))?;
 
     #[cfg(not(any(
