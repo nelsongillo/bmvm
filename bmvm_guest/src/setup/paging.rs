@@ -1,4 +1,4 @@
-use crate::setup::{gdt, idt};
+use crate::setup::{NON_PAGING_PAGE_REQ, NON_PAGING_SPACE_REQ};
 use bmvm_common::error::ExitCode;
 use bmvm_common::mem::*;
 use x86_64::structures::paging::mapper::PageTableFrameMapping;
@@ -8,7 +8,9 @@ use x86_64::structures::paging::{
 };
 
 pub(crate) fn setup(table: &LayoutTable, sys: LayoutTableEntry) -> Result<(), ExitCode> {
-    let pml4_addr_raw = sys.addr_raw();
+    // Beginning of the Paging structure
+    // The page table is located after the GDT and IDT
+    let pml4_addr_raw = sys.addr_raw() + NON_PAGING_SPACE_REQ;
     // write_addr(pml4_addr_raw);
     let pml4_addr = PhysAddr::<Impl>::new_unchecked(pml4_addr_raw).as_virt_addr();
     let pml4 = unsafe { &mut *(pml4_addr.as_u64() as *mut PageTable) };
@@ -77,8 +79,6 @@ unsafe impl PageTableFrameMapping for Identity {
     }
 }
 
-const PAGE_REQ_BY_OTHERS: usize = gdt::PAGE_REQ + idt::PAGE_REQ;
-
 struct PseudoAllocator {
     next: u64,
     max_allocatable: usize,
@@ -89,7 +89,7 @@ impl PseudoAllocator {
     pub fn new(entry: LayoutTableEntry) -> Self {
         PseudoAllocator {
             next: entry.addr().as_u64(),
-            max_allocatable: entry.len() as usize - PAGE_REQ_BY_OTHERS,
+            max_allocatable: entry.len() as usize - NON_PAGING_PAGE_REQ as usize,
             curr_allocated: 0,
         }
     }

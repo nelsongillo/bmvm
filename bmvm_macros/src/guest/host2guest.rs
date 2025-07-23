@@ -1,12 +1,16 @@
-use bmvm_common::hash::{Djb2, Djb264};
-use proc_macro::{Span, TokenStream};
-use proc_macro_crate::{FoundCrate, crate_name};
-use proc_macro2::{Span as Span2, TokenStream as TokenStream2};
-use quote::{format_ident, quote};
+use crate::guest::gen_call_meta_debug;
+use crate::guest::util::{create_fn_call, gen_callmeta};
+use crate::util::{find_crate, is_reference_type, suffix};
+use bmvm_common::{BMVM_META_SECTION_EXPOSE, BMVM_META_SECTION_EXPOSE_CALLS};
+use proc_macro::TokenStream;
+use proc_macro2::{Span, TokenStream as TokenStream2};
+use quote::{ToTokens, format_ident, quote};
+use syn::spanned::Spanned;
 use syn::{
-    FnArg, Ident, ItemFn, Pat, PatType, Type, TypePath, WherePredicate, parse_macro_input,
-    parse_quote,
+    Error, FnArg, Ident, ItemFn, Pat, PatType, Type, WherePredicate, parse_macro_input, parse_quote,
 };
+
+static PARAM_VAR_NAME: &'static str = "__params";
 
 type StructFields = Vec<TokenStream2>;
 type WherePreds = Vec<WherePredicate>;
@@ -22,42 +26,107 @@ pub fn expose_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // Extract the function name and signature
     let fn_name = &input_fn.sig.ident;
-    let fn_vis = &input_fn.vis;
-    let fn_output = &input_fn.sig.output;
+
+    // bmvm-guest crate
+    let crate_guest = match find_crate("bmvm-guest") {
+        Ok(x) => x,
+        Err(e) => return e.to_compile_error().into(),
+    };
+
+    // vmi metadata generation
+    let fn_call = create_fn_call(&input_fn.attrs, &input_fn.sig);
+    if fn_call.is_err() {
+        return fn_call.err().unwrap().to_compile_error().into();
+    }
+    let (fn_call, params, return_type) = fn_call.unwrap();
+    let upcall_sig = fn_call.signature();
+
+    // generate call meta static data
+    let (meta, _) = match gen_callmeta(
+        input_fn.span(),
+        fn_call,
+        params,
+        return_type,
+        fn_name.to_string().as_str(),
+        BMVM_META_SECTION_EXPOSE,
+    ) {
+        Ok(x) => x,
+        Err(e) => return e.to_compile_error().into(),
+    };
+    let debug = gen_call_meta_debug();
 
     // build struct fields and unpacking logic
     let params = extract_params(&input_fn);
-    let (struct_fields, where_preds, param_unpacking) = match process_params(&params) {
+    let (struct_fields, param_where_preds, param_unpacking) = match process_params(&params) {
         Ok(x) => x,
         Err(e) => return e.to_compile_error().into(),
     };
 
     // construct the function and struct names
-    let suffix = suffix();
-    let wrapper_fn_name = format_ident!("{}_bmvm_wrapper_{}", fn_name, suffix);
-    let struct_name = format_ident!("{}BMVMWrapper{}", fn_name, suffix);
+    let (wrapper_fn_name, struct_name, static_ptr_name, static_upcall) =
+        construct_idents(fn_name, suffix().as_str());
+
+    let params_from_ptr = if params.is_empty() {
+        quote! {}.into()
+    } else {
+        match struct_from_pointer(&struct_name) {
+            Ok(x) => x,
+            Err(e) => return e.to_compile_error().into(),
+        }
+    };
+
+    let sort_section_name = format!("{}.{:016x}", BMVM_META_SECTION_EXPOSE_CALLS, upcall_sig);
 
     // Generate the final token stream
-    let expanded = quote! {
-        // The original function will remain unchanged
+    quote! {
+        #debug
+
+        #meta
+
         #input_fn
 
-        // Struct containing all parameters for #fn_name
-        #fn_vis struct #struct_name
+        #[repr(C)]
+        #[allow(non_camel_case_types)]
+        #[derive(#crate_guest::TypeHash)]
+        struct #struct_name
         where
-            #(#where_preds),*
+            #(#param_where_preds),*
         {
             #(#struct_fields),*
         }
 
+        extern "C" fn #wrapper_fn_name() {
+            unsafe {
+                #params_from_ptr
+                let __ret = #fn_name(#(#param_unpacking),*);
 
-        // Wrapper function for #fn_name
-        #fn_vis fn #wrapper_fn_name(params: #struct_name) #fn_output {
-            #fn_name(#(#param_unpacking),*)
+                use #crate_guest::OwnedShareable;
+                __ret.write();
+            }
         }
-    };
 
-    TokenStream::from(expanded)
+        #[used]
+        #[allow(non_upper_case_globals)]
+        #[unsafe(link_section = #sort_section_name)]
+        static #static_upcall: #crate_guest::UpcallFn = #crate_guest::UpcallFn {
+            sig: #upcall_sig,
+            func: #wrapper_fn_name,
+        };
+    }
+    .into()
+}
+
+fn construct_idents(fn_name: &Ident, suffix: &str) -> (Ident, Ident, Ident, Ident) {
+    let wrapper_fn_name = format_ident!("{}_bmvm_wrapper_{}", fn_name, suffix);
+    let struct_name = format_ident!("{}BMVMWrapper{}", fn_name, suffix);
+    let static_ptr_name = format_ident!("PTR_BMVM_FN_WRAPPER_{}", suffix);
+    let static_upcall_name = format_ident!("UPCALL_FN_WRAPPER_{}", suffix);
+    (
+        wrapper_fn_name,
+        struct_name,
+        static_ptr_name,
+        static_upcall_name,
+    )
 }
 
 /// Extract the function parameters and their types
@@ -79,14 +148,41 @@ fn extract_params(func: &ItemFn) -> Vec<(Ident, Type)> {
         .collect()
 }
 
+/// Generate code which reads EBX register for the offset ptr and builds the Foreign<T> for
+/// the function params
+fn struct_from_pointer(ty: &Ident) -> Result<TokenStream2, Error> {
+    let crate_name = find_crate("bmvm-guest")?;
+    let raw_offset_ptr = quote! {#crate_name::RawOffsetPtr};
+    let get_foreign = quote! {#crate_name::get_foreign};
+    let offset_ptr = quote! {#crate_name::OffsetPtr};
+    let exit_with_code = quote! {#crate_name::exit_with_code};
+    let exit_code_ptr = quote! {#crate_name::ExitCode::Ptr};
+    let params = Ident::new(PARAM_VAR_NAME, ty.span());
+    Ok(quote! {
+        let __offset: u32;
+        use core::arch::asm;
+        unsafe {
+            asm!("mov ebx, {0:e}", out(reg) __offset);
+        }
+        let __raw = #raw_offset_ptr::from(__offset);
+        let __result_foreign = #get_foreign(#offset_ptr::<#ty>::from(__raw));
+        let __foreign = match __result_foreign {
+            Ok(f) => f,
+            Err(e) => #exit_with_code ( #exit_code_ptr ( __raw ) ),
+        };
+        let #params = __foreign.get();
+    })
+}
+
 /// Process the function parameters and generate the struct fields and unpacking logic
 fn process_params(
     params: &Vec<(Ident, Type)>,
-) -> Result<(StructFields, WherePreds, ParamUnpacking), syn::Error> {
+) -> Result<(StructFields, WherePreds, ParamUnpacking), Error> {
     // Resolve the BMVM commons crate and construct trait types
-    let crate_bmvm = find_crate("bmvm-common")?;
-    let trait_type = quote! {#crate_bmvm::registry::Type};
-    let trait_serializable = quote! {#crate_bmvm::registry::Serializable};
+    let crate_bmvm = find_crate("bmvm-guest")?;
+    let trait_hashable = quote! {#crate_bmvm::TypeHash};
+    let trait_foreign_sharable = quote! {#crate_bmvm::ForeignShareable};
+    let var_params = Ident::new(PARAM_VAR_NAME, Span::call_site());
 
     // fields used in the wrapper struct
     let mut struct_fields = Vec::new();
@@ -97,90 +193,19 @@ fn process_params(
 
     // Process each parameter
     for (name, ty) in params {
-        // Check if the type is an integer type or other Type impl
-        let is_type_impl = if let Type::Path(TypePath { path, .. }) = ty {
-            if let Some(segment) = path.segments.last() {
-                let ident = segment.ident.to_string();
-                matches!(
-                    ident.as_str(),
-                    "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" | "*const u8"
-                )
-            } else {
-                false
+        match is_reference_type(ty) {
+            Some(referenced) => {
+                struct_fields.push(quote! { pub #name: #referenced });
+                where_preds.push(parse_quote!(#referenced: #trait_foreign_sharable));
+                param_unpacking.push(quote! { &#var_params.#name });
             }
-        } else {
-            false
-        };
-
-        if is_type_impl {
-            // For Type-implementing parameters, add them directly
-            struct_fields.push(quote! { pub #name: #ty });
-            param_unpacking.push(quote! { params.#name });
-            where_preds.push(parse_quote!(#ty: #trait_type));
-        } else {
-            // For Serializable parameters, add pointer and size fields
-            let ptr_name = format_ident!("{}_ptr", name);
-            let size_name = format_ident!("{}_size", name);
-
-            // Add the pointer and size fields to the struct
-            struct_fields.push(quote! { pub #ptr_name: *const u8 });
-            struct_fields.push(quote! { pub #size_name: u32 });
-
-            // Add Type trait bounds for the pointer and size
-            where_preds.push(parse_quote!(*const u8: #trait_type));
-            where_preds.push(parse_quote!(u32: #trait_type));
-
-            // Generate the parameter unpacking logic - converting raw pointer back to the serializable type
-            param_unpacking.push(quote! {
-                {
-                    // Only proceed if the pointer is not null and size > 0
-                    if !params.#ptr_name.is_null() && params.#size_name > 0 {
-                        // Create a slice from the pointer and size
-                        let bytes = unsafe {
-                            core::slice::from_raw_parts(params.#ptr_name, params.#size_name as usize)
-                        };
-
-                        // Deserialize the slice back to the original type
-                        #trait_serializable::from_bytes(bytes)
-                    } else {
-                        // Handle null pointer or zero size case
-                        panic!("Null pointer or zero size for parameter {}", stringify!(#name));
-                    }
-                }
-            });
+            None => {
+                struct_fields.push(quote! { pub #name: #ty });
+                where_preds.push(parse_quote!(#ty: #trait_hashable));
+                param_unpacking.push(quote! { #var_params.#name });
+            }
         }
     }
 
     Ok((struct_fields, where_preds, param_unpacking))
-}
-
-/// Try finding the crate by name to e.g.: generate a proper import statement.
-fn find_crate(src: &str) -> Result<Ident, syn::Error> {
-    let found_crate = crate_name(src);
-    if found_crate.is_err() {
-        return Err(syn::Error::new_spanned(
-            src,
-            format!(
-                "Crate {} could not be found. Make sure to include it in your Cargo.toml",
-                src
-            ),
-        ));
-    }
-
-    let found_crate = found_crate.unwrap();
-    Ok(match found_crate {
-        FoundCrate::Itself => Ident::new("crate", Span2::call_site()),
-        FoundCrate::Name(name) => Ident::new(&name, Span2::call_site()),
-    })
-}
-
-/// build the suffix for generated function and struct names based on the calling span
-fn suffix() -> String {
-    let span = Span::call_site();
-    let mut hasher = Djb264::new();
-    hasher.write(span.file().as_bytes());
-    hasher.write(span.line().to_string().as_bytes());
-    hasher.write(span.column().to_string().as_bytes());
-    let hash = hasher.finish();
-    format!("{:x}", hash)
 }

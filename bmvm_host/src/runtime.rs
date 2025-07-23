@@ -1,4 +1,4 @@
-use crate::linker::{Linker, LinkerConfig};
+use crate::linker::{Config, Linker};
 use crate::vm;
 use crate::{
     elf,
@@ -31,7 +31,7 @@ impl Runtime {
         let buffer = Buffer::new(path)?;
 
         let vm = vm::Vm::new(cfg)?;
-        let linker = Linker::new(LinkerConfig::default());
+        let linker = Linker::new(Config::default());
         let executable = ExecBundle::from_buffer(buffer, vm.allocatort())?;
 
         Ok(Self {

@@ -1,8 +1,6 @@
 /*
 TODO:
  - setup idt
- - setup gdt
- - setup stack
  - setup host-calls
  */
 use bmvm_common::BMVM_MEM_LAYOUT_TABLE;
@@ -14,6 +12,19 @@ use core::arch::asm;
 mod gdt;
 mod idt;
 mod paging;
+
+/// GDT requires 1 page
+pub const GDT_PAGE_REQ: u64 = 1;
+pub const GDT_SPACE_REQ: u64 = Page4KiB::ALIGNMENT * GDT_PAGE_REQ;
+
+/// IDT requires 1 page
+pub const IDT_PAGE_REQ: u64 = 1;
+pub const IDT_SPACE_REQ: u64 = Page4KiB::ALIGNMENT * IDT_PAGE_REQ;
+
+/// Pages to allocate for non-paging related structures in the sys memory region
+pub const NON_PAGING_PAGE_REQ: u64 = GDT_PAGE_REQ + IDT_PAGE_REQ;
+/// Bytes offset the paging structure by in the sys memory region
+pub const NON_PAGING_SPACE_REQ: u64 = GDT_SPACE_REQ + IDT_SPACE_REQ;
 
 static mut COUNTER: u8 = u8::MIN;
 unsafe fn counter() -> u8 {
@@ -66,13 +77,13 @@ pub fn setup() -> Result<(), ExitCode> {
     write(IO_PORT, unsafe { counter() });
 
     // set up the Interrupt Table
-    idt::setup()?;
+    idt::setup(&region_sys, 0)?;
 
     // stage 3 -> IDT done
     write(IO_PORT, unsafe { counter() });
 
     // set up the Global Descriptor Table
-    gdt::setup()?;
+    gdt::setup(&region_sys, IDT_SPACE_REQ)?;
 
     // stage 4 -> GDT done
     write(IO_PORT, unsafe { counter() });

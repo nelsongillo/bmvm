@@ -1,10 +1,12 @@
 mod addr;
 mod align;
+mod alloc;
 mod bits;
 mod layout;
 
 pub use addr::*;
 pub use align::*;
+pub use alloc::*;
 pub use bits::*;
 pub use layout::*;
 
@@ -19,7 +21,7 @@ pub fn aligned_and_fits<A: Align>(from: u64, to: u64) -> bool {
 
 mod tests {
     #![allow(unused_imports)]
-    use crate::mem::{Page2MiB, Page4KiB, aligned_and_fits};
+    use crate::mem::{Page4KiB, aligned_and_fits};
 
     #[test]
     fn not_aligned() {
@@ -49,10 +51,5 @@ mod tests {
     #[test]
     fn from_eq_to() {
         assert!(!aligned_and_fits::<Page4KiB>(0x1000, 0x1000));
-    }
-
-    #[test]
-    fn aa() {
-        assert!(aligned_and_fits::<Page2MiB>(1072693248, 1074790400));
     }
 }

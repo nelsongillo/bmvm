@@ -1,77 +1,52 @@
-pub trait Djb2 {
-    type Output;
-
-    const OFFSET: Self::Output;
-
-    fn write(&mut self, input: &[u8]);
-    fn finish(self) -> Self::Output;
-    fn hash(input: &[u8]) -> Self::Output;
-}
-
 /// variation on the DJB2 hash algorithm limited to 32bit integer
-pub struct Djb232(u32);
+#[repr(transparent)]
+pub struct Djb2(u64);
 
-impl Djb232 {
-    pub fn new() -> Self {
-        // 5381 is the initial hash value for DJB2
+impl Djb2 {
+    const OFFSET: u64 = 5381;
+
+    /// Create a new Djb2 hasher instance
+    pub const fn new() -> Self {
         Self(Self::OFFSET)
     }
-}
 
-impl Djb2 for Djb232 {
-    type Output = u32;
-    const OFFSET: Self::Output = 5381;
+    /// Create a new Djb2 hasher instance from a partial result. Useful for incremental hashing.
+    pub const fn from_partial(partial: u64) -> Self {
+        Self(partial)
+    }
 
-    fn write(&mut self, input: &[u8]) {
-        for byte in input.iter() {
+    /// Write input to the hasher.
+    pub const fn write(&mut self, input: &[u8]) {
+        let mut i = 0;
+        while i < input.len() {
             self.0 = self
                 .0
                 .wrapping_shl(5)
                 .wrapping_add(self.0)
-                .wrapping_add(*byte as Self::Output);
+                .wrapping_add(input[i] as u64);
+            i += 1;
         }
     }
 
-    fn finish(self) -> Self::Output {
+    /// Get the final hash value.
+    pub const fn finish(self) -> u64 {
         self.0
     }
 
-    fn hash(input: &[u8]) -> Self::Output {
-        let mut hasher = Djb232::new();
-        hasher.write(input);
-        hasher.finish()
-    }
-}
-
-/// variation on the DJB2 hash algorithm limited to 32bit integer
-pub struct Djb264(u64);
-
-impl Djb264 {
-    pub fn new() -> Self {
-        Self(Self::OFFSET)
-    }
-}
-
-impl Djb2 for Djb264 {
-    type Output = u64;
-    const OFFSET: Self::Output = 5381;
-
-    fn write(&mut self, input: &[u8]) {
-        for byte in input.iter() {
-            self.0 = self
-                .0
-                .wrapping_shl(5)
-                .wrapping_add(self.0)
-                .wrapping_add(*byte as Self::Output);
-        }
-    }
-
-    fn finish(self) -> Self::Output {
-        self.0
-    }
-
-    fn hash(input: &[u8]) -> Self::Output {
-        let mut hasher = Djb264::new();
+    /// Hash an input. Same as creating a new instance, writing the single input and finishing.
+    ///
+    /// ```rust
+    /// use bmvm_common::hash::Djb2;
+    ///
+    /// let input = b"hello, World!";
+    ///
+    /// let mut verbose = Djb2::new();
+    /// verbose.write(input);
+    ///
+    /// assert_eq!(verbose.finish(), Djb2::hash(input));
+    /// ```
+    pub const fn hash(input: &[u8]) -> u64 {
+        let mut hasher = Djb2::new();
         hasher.write(input);
         hasher.finish()
     }
@@ -82,29 +57,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn djb2_32() {
-        let zero = Djb232::new();
+    fn test() {
+        let zero = Djb2::new();
         assert_eq!(5381, zero.finish());
 
-        let mut hello_en = Djb232::new();
-        hello_en.write("hello".as_bytes());
-        assert_eq!(261238937, hello_en.finish());
-
-        let mut hello_de = Djb232::new();
-        hello_de.write("hallo".as_bytes());
-        assert_eq!(261095189, hello_de.finish());
-    }
-
-    #[test]
-    fn djb2_64() {
-        let zero = Djb264::new();
-        assert_eq!(5381, zero.finish());
-
-        let mut hello_en = Djb264::new();
+        let mut hello_en = Djb2::new();
         hello_en.write("hello".as_bytes());
         assert_eq!(210714636441, hello_en.finish());
 
-        let mut hello_de = Djb264::new();
+        let mut hello_de = Djb2::new();
         hello_de.write("hallo".as_bytes());
         assert_eq!(210714492693, hello_de.finish());
     }

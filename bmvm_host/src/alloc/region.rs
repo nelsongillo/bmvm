@@ -250,6 +250,11 @@ impl<P: Perm, A: Align> ProtoRegion<P, A> {
             _align: PhantomData,
         }
     }
+
+    /// Get the region size. This will always be a multiple of Align
+    pub fn capacity(&self) -> AlignedNonZeroUsize {
+        self.capacity
+    }
 }
 
 /// This represents a memory region on host, which can be mapped into the physical memory
@@ -670,8 +675,10 @@ unsafe fn set_as_guest_memory_memfd(
         pad2: [0; 14],
     };
 
-    vm.set_user_memory_region2(mapping)
-        .map_err(|e| Error::RegionMappingFailed(addr, e))
+    unsafe {
+        vm.set_user_memory_region2(mapping)
+            .map_err(|e| Error::RegionMappingFailed(addr, e))
+    }
 }
 
 unsafe fn set_as_guest_memory_mmap(
@@ -689,8 +696,10 @@ unsafe fn set_as_guest_memory_mmap(
         userspace_addr: mem.as_ptr() as u64,
     };
 
-    vm.set_user_memory_region(mapping)
-        .map_err(|e| Error::RegionMappingFailed(addr, e))
+    unsafe {
+        vm.set_user_memory_region(mapping)
+            .map_err(|e| Error::RegionMappingFailed(addr, e))
+    }
 }
 
 unsafe fn remove_from_guest_memory_memfd(
@@ -712,8 +721,10 @@ unsafe fn remove_from_guest_memory_memfd(
         pad2: [0; 14],
     };
 
-    vm.set_user_memory_region2(mapping)
-        .map_err(|e| Error::RegionUnmappingFailed(addr, e))
+    unsafe {
+        vm.set_user_memory_region2(mapping)
+            .map_err(|e| Error::RegionUnmappingFailed(addr, e))
+    }
 }
 
 unsafe fn remove_from_guest_memory_mmap(
@@ -731,6 +742,8 @@ unsafe fn remove_from_guest_memory_mmap(
         userspace_addr: mem.as_ptr() as u64,
     };
 
-    vm.set_user_memory_region(mapping)
-        .map_err(|e| Error::RegionUnmappingFailed(addr, e))
+    unsafe {
+        vm.set_user_memory_region(mapping)
+            .map_err(|e| Error::RegionUnmappingFailed(addr, e))
+    }
 }

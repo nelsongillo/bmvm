@@ -3,6 +3,13 @@ name = "bmvm-macros"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+guest = []
+host = []
+vmi-debug = ["bmvm-common/vmi-debug"]
+vmi-no-debug = ["bmvm-common/vmi-no-debug"]
+vmi-consume = ["bmvm-common/vmi-consume"]
+
 [lib]
 proc-macro = true
 

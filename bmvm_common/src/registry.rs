@@ -13,9 +13,6 @@ pub const LINK_META_NAME_GUEST: &str = ".bmvm.call.guest";
 #[sealed]
 pub trait Type {}
 
-/// Non `Type` types must implement this trait to be passed between host and guest.
-pub trait Serializable<'de>: serde::Deserialize<'de> + serde::Serialize {}
-
 macro_rules! impl_type {
     ($($s:tt = $t:ty),*) => {
         $(
@@ -61,12 +58,15 @@ impl_type!(
     Int8 = i8,
     Int16 = i16,
     Int32 = i32,
-    Int64 = i64,
-    Ptr = *const u8
+    Int64 = i64
 );
 
-pub trait Params {}
-pub trait Return<'de>: Serializable<'de> {}
+/// This trait is used to enforce the rule that functions intended for cross-boundary calls must
+/// have parameters which are either primitives implementing the `Type` trait or passable messages.
+/// To be able to be a passable message, the type must
+/// * Sized
+/// * be `repr(C)` or `repr(transparent)` (where the single field must implement `Msg`)
+pub trait Params: Sized {}
 
 macro_rules! for_each_function_signature {
     ($mac:ident) => {

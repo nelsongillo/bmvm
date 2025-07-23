@@ -1,6 +1,7 @@
 use crate::interprete::{Interpret, Zero};
 use crate::mem::{Align, DefaultAlign, PhysAddr};
 use bitflags::bitflags;
+#[cfg(feature = "std")]
 use core::fmt::{Display, Formatter};
 use x86_64::structures::paging::PageTableFlags;
 
@@ -296,12 +297,12 @@ mod test {
 
     #[test]
     fn layout_table_entry_new() {
-        let addr = PhysAddr::new(0x0000_1234_5678_9000);
+        let addr = PhysAddr::new_unchecked(0x0000_1234_5678_9000);
         let entry = LayoutTableEntry::new(addr, 0x1234, Flags::empty());
         assert_eq!(0x1234567890123400, entry.0, "got {:x}", entry.0);
         assert_eq!(
             addr.as_u64(),
-            entry.addr().as_u64(),
+            entry.addr_raw(),
             "got {:x}",
             entry.addr().as_u64()
         );
@@ -316,7 +317,7 @@ mod test {
         entry
             .set_len(0xabcde)
             .set_flags(Flags::CODE | Flags::PRESENT)
-            .set_addr(PhysAddr::new(0x0000123456789000)); // check for correct truncation
+            .set_addr(PhysAddr::new_unchecked(0x0000123456789000)); // check for correct truncation
         assert_eq!(0x123456789abcde05, entry.0, "got {:x}", entry.0);
     }
 

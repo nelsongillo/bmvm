@@ -2,8 +2,16 @@
 
 mod guest;
 mod host;
+mod typehash;
+mod util;
 
 use proc_macro::TokenStream;
+
+#[cfg(all(feature = "host", feature = "guest"))]
+compile_error!("Features `host` and `guest` cannot be enabled at the same time.");
+
+#[cfg(not(any(feature = "host", feature = "guest")))]
+compile_error!("Either feature `host` or `guest` must be enabled!");
 
 /// Device the VM guest entry point. The marked function will be treated like the main function.
 ///
@@ -37,4 +45,9 @@ pub fn expose_guest(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn expose_host(attr: TokenStream, item: TokenStream) -> TokenStream {
     host::expose_impl(attr, item)
+}
+
+#[proc_macro_derive(TypeHash)]
+pub fn derive_type_hash_impl(input: TokenStream) -> TokenStream {
+    typehash::derive_type_hash_impl(input)
 }

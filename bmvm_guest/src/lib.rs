@@ -1,14 +1,29 @@
+#![feature(abi_x86_interrupt)]
 #![no_std]
 #![no_main]
 
 mod panic;
 mod setup;
+mod vmi;
+
+use bmvm_common::mem::LayoutTableEntry;
+use core::arch::asm;
+
+pub use panic::{exit_with_code, halt, panic, panic_with_code};
 
 pub use bmvm_common::error::ExitCode;
-use bmvm_common::mem::LayoutTableEntry;
+pub use bmvm_common::hash::Djb2;
+pub use bmvm_common::mem::{
+    Foreign, ForeignBuf, ForeignShareable, OffsetPtr, Owned, OwnedBuf, OwnedShareable,
+    RawOffsetPtr, Shared, SharedBuf, alloc, alloc_buf, dealloc, dealloc_buf, get_foreign,
+};
+pub use bmvm_common::vmi::{Signature, UpcallFn};
+// re-export: bmvm-common
+pub use bmvm_common::TypeHash;
+
+// re-export: bmvm-macros
+pub use bmvm_macros::TypeHash;
 pub use bmvm_macros::{entry, expose_guest as expose, host};
-use core::arch::asm;
-pub use panic::{exit_with_code, halt, panic, panic_with_code};
 
 unsafe extern "C" {
     fn __process_entry();

@@ -4,6 +4,8 @@ use bmvm_common::mem::{
     Align, AlignedNonZeroUsize, DefaultAlign, Flags, LayoutTableEntry, MAX_REGION_SIZE, PhysAddr,
     align_ceil, align_floor,
 };
+use bmvm_common::vmi::{Error as VmiError, FnCall};
+use bmvm_common::{BMVM_META_SECTION_DEBUG, BMVM_META_SECTION_EXPOSE, BMVM_META_SECTION_HOST};
 use goblin::elf;
 use goblin::elf::{Elf, ProgramHeader};
 use goblin::elf32::header::machine_to_str;
@@ -49,6 +51,13 @@ pub enum Error {
     #[error("Unable to parse ELF: {0}")]
     ElfParse(#[from] goblin::error::Error),
 
+    #[error("Unable to parse VMI section {section}: {source:?}")]
+    VmiParse {
+        section: String,
+        #[source]
+        source: VmiError,
+    },
+
     #[error("{0}")]
     Alloc(#[from] region::Error),
 
@@ -83,7 +92,12 @@ pub struct ExecBundle {
     pub(crate) entry: PhysAddr,
     pub(crate) mem_regions: RegionCollection,
     pub(crate) layout: Vec<LayoutTableEntry>,
-    // pub calls: Vec<CallMeta>,
+    /// All function calls exposed by the guest, which are callable by the host
+    /// The vector is guaranteed to be sorted.
+    pub(crate) expose: Vec<FnCall>,
+    /// All function calls expected to be provided to the guest by the host.
+    /// The vector is guaranteed to be sorted.
+    pub(crate) host: Vec<FnCall>,
 }
 
 fn section_name_to_flags(name: &str) -> Result<Flags> {
@@ -134,42 +148,74 @@ impl ExecBundle {
             mem_regions.push(mem);
         }
 
+        let vmi_debug = Self::is_vmi_debug(&elf);
+        let expose = Self::parse_vmi_vec(&elf, &buf.as_ref(), BMVM_META_SECTION_EXPOSE, vmi_debug)?;
+        let host = Self::parse_vmi_vec(&elf, &buf.as_ref(), BMVM_META_SECTION_HOST, vmi_debug)?;
+
         Ok(Self {
             entry,
             mem_regions,
             layout,
+            expose,
+            host,
         })
     }
 
-    /*
-    fn parse_meta(elf: &Elf, buf: &[u8]) -> anyhow::Result<Vec<CallMeta>> {
-        let mut content: &[u8] = &[];
+    /// If the debug section header is included, then VMI call data includes debug information
+    /// i.e. parameter and return types
+    fn is_vmi_debug(elf: &Elf) -> bool {
+        Self::find_section_header(elf, BMVM_META_SECTION_DEBUG).is_some()
+    }
 
-        for section in  elf.section_headers.iter() {
+    /// Return the index to the section header if a section with `name` is found in the ELF file
+    fn find_section_header(elf: &Elf, name: &str) -> Option<usize> {
+        for (idx, section) in elf.section_headers.iter().enumerate() {
             let name_offset = section.sh_name;
             // No index in shstrtab -> no name
             if name_offset == 0 {
                 continue;
             }
-            // retrieve name from shstrtab and match it with our custom Metadata section name
-            if let Some(name) = elf.shdr_strtab.get_at(name_offset) {
-                if !name.eq(BMVM_META_SECTION) {
-                    continue;
+            // retrieve name from shstrtab and match
+            if let Some(sh_name) = elf.shdr_strtab.get_at(name_offset) {
+                if name.eq(sh_name) {
+                    return Some(idx);
                 }
-
-                // retrieve content of section
-                content = &buf[section.sh_offset as usize..(section.sh_offset + section.sh_size) as usize];
-                break;
             }
         }
 
-        if content.is_empty() {
-            return Err(anyhow!("No metadata section found."));
+        None
+    }
+
+    /// Parse a vector of VMI calls from the ELF file from the section with `name`.
+    /// On success, the returned vector is sorted via Vec::sort
+    fn parse_vmi_vec(
+        elf: &Elf,
+        buf: &[u8],
+        section_name: &str,
+        debug: bool,
+    ) -> Result<Vec<FnCall>> {
+        if let Some(idx) = Self::find_section_header(elf, section_name) {
+            let section = &elf.section_headers[idx];
+            let content =
+                &buf[section.sh_offset as usize..(section.sh_offset + section.sh_size) as usize];
+
+            if content.is_empty() {
+                log::warn!("VMI section defined but empty: {}", section_name);
+                return Ok(Vec::new());
+            }
+
+            let mut calls =
+                FnCall::try_from_bytes_vec(content, debug).map_err(|e| Error::VmiParse {
+                    section: section_name.to_string(),
+                    source: e,
+                })?;
+            // ensure to sort the function calls
+            calls.sort();
+            return Ok(calls);
         }
 
-        Ok(CallMeta::try_from_bytes_vec(&content)?)
+        Ok(Vec::new())
     }
-     */
 
     fn build_layout_table_entry(
         ph_idx: usize,

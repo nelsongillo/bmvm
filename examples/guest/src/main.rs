@@ -1,28 +1,39 @@
 #![no_std]
 #![no_main]
-extern crate bmvm_guest;
 
-use core::arch::asm;
+use bmvm_guest::{Foreign, ForeignBuf, TypeHash, entry, expose, host};
 
-const IO_PORT: u16 = 0x3f8;
+#[repr(transparent)]
+#[derive(TypeHash)]
+struct Foo(Bar);
 
-fn write_buf(port: u16, buf: &[u8]) {
-    unsafe {
-        asm!(
-        "rep outsb",
-        in("dx") port,
-        in("si") buf.as_ptr() as u32,
-        in("cx") buf.len() as u16,
-        );
+#[repr(C)]
+#[derive(TypeHash)]
+struct Bar {
+    a: u32,
+    b: u32,
+}
+
+#[host]
+unsafe extern "C" {
+    fn foo(_b: Bar, _f: Foo);
+    fn another(_a: u32, _b: u32);
+}
+
+#[expose]
+fn argless() {}
+
+#[expose]
+fn with_params(a: u32, b: i64, c: bool, buf: &ForeignBuf, _v: &Foreign<Bar>) -> u64 {
+    let mut ret = a as u64 + b as u64;
+    for v in buf.as_ref() {
+        ret += *v as u64;
     }
+    if c { ret + 1 } else { ret - 1 }
 }
 
+#[entry]
 fn main() {
-    let buf = b"Hello, From Guest";
-    write_buf(IO_PORT, buf);
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn __process_entry() {
-    main();
+    foo(Bar { a: 1, b: 2 }, Foo(Bar { a: 3, b: 4 }));
+    another(1, 2);
 }

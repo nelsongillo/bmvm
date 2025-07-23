@@ -64,6 +64,16 @@ impl<B: AddrSpace> PhysAddr<B> {
         self.inner as usize
     }
 
+    #[inline]
+    pub const fn as_ptr<T>(&self) -> *const T {
+        self.inner as *const T
+    }
+
+    #[inline]
+    pub const fn as_mut_ptr<T>(&self) -> *mut T {
+        self.inner as *mut T
+    }
+
     /// Convert the physical address to a virtual address.
     /// The system uses two address mapping modes:
     /// For physical addresses in the lower half of the the address space, an identity mapping is
