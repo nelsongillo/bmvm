@@ -1,9 +1,9 @@
 #![feature(proc_macro_span)]
 
+mod common;
 mod guest;
 mod host;
 mod typehash;
-mod util;
 
 use proc_macro::TokenStream;
 
@@ -47,7 +47,7 @@ pub fn expose_host(attr: TokenStream, item: TokenStream) -> TokenStream {
     host::expose_impl(attr, item)
 }
 
-#[proc_macro_derive(TypeHash)]
-pub fn derive_type_hash_impl(input: TokenStream) -> TokenStream {
-    typehash::derive_type_hash_impl(input)
+#[proc_macro_derive(TypeSignature)]
+pub fn derive_type_signature(input: TokenStream) -> TokenStream {
+    typehash::derive_type_signature_impl(input)
 }

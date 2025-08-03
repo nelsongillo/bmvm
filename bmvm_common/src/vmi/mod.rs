@@ -3,6 +3,7 @@ mod meta;
 
 #[cfg(any(feature = "vmi-consume", feature = "std"))]
 pub use meta::*;
+
 pub type Signature = u64;
 
 #[repr(C)]

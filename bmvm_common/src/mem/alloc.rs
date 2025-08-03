@@ -1,46 +1,11 @@
-use crate::TypeHash;
+use crate::error::ExitCode;
 use crate::mem::{AlignedNonZeroUsize, VirtAddr};
+use crate::typesignature::TypeSignature;
 use core::alloc::{Allocator, Layout};
-use core::arch::asm;
 use core::num::NonZeroUsize;
 use core::ptr::NonNull;
 use spin::once::Once;
 use talc::{ErrOnOom, Span, Talc};
-
-#[sealed::sealed]
-pub unsafe trait OwnedShareable {
-    unsafe fn write(&self);
-}
-
-#[sealed::sealed]
-pub trait ForeignShareable {}
-
-#[sealed::sealed]
-unsafe impl OwnedShareable for () {
-    unsafe fn write(&self) {}
-}
-
-macro_rules! impl_shareable_for_primitives {
-    ($($prim:ty),* $(,)?) => {
-        $(
-            #[sealed::sealed]
-            unsafe impl OwnedShareable for $prim {
-                unsafe fn write(&self) {
-                    unsafe {
-                        asm!(
-                            "mov {0}, rbx",
-                            in(reg) *self as u64,
-                            options(nostack, preserves_flags)
-                        )
-                    }
-                }
-            }
-        )*
-    };
-}
-impl_shareable_for_primitives!(
-    u8, u16, u32, u64, u128, i8, i16, i32, i64, i128, f32, f64, bool, char, usize
-);
 
 static ALLOC_FOREIGN: Once<AllocImpl<spin::Mutex<()>, ErrOnOom>> = Once::new();
 static ALLOC_OWN: Once<AllocImpl<spin::Mutex<()>, ErrOnOom>> = Once::new();
@@ -78,7 +43,7 @@ impl<M: lock_api::RawMutex, O: talc::OomHandler> AllocImpl<M, O> {
         })
     }
 
-    unsafe fn alloc<T: TypeHash>(&self) -> Result<Owned<T>, Error> {
+    unsafe fn alloc<T: TypeSignature>(&self) -> Result<Owned<T>, Error> {
         let layout = Layout::new::<T>();
         self.talck
             .allocate(layout)
@@ -101,7 +66,7 @@ impl<M: lock_api::RawMutex, O: talc::OomHandler> AllocImpl<M, O> {
         Ok(OwnedBuf::new(ptr, NonZeroUsize::new(size).unwrap()))
     }
 
-    fn dealloc<T: TypeHash>(&self, ptr: NonNull<T>) {
+    fn dealloc<T: TypeSignature>(&self, ptr: NonNull<T>) {
         let layout = Layout::new::<T>();
         unsafe { self.talck.deallocate(ptr.cast::<u8>(), layout) }
     }
@@ -114,7 +79,7 @@ impl<M: lock_api::RawMutex, O: talc::OomHandler> AllocImpl<M, O> {
 
     /// Check the offset pointer for validity (fits in the arena) and return a readable reference
     /// to the underlying data.
-    fn get_foreign<T: TypeHash>(&self, offset: OffsetPtr<T>) -> Result<Foreign<T>, Error> {
+    fn get_foreign<T: TypeSignature>(&self, offset: OffsetPtr<T>) -> Result<Foreign<T>, Error> {
         if offset.offset as usize + size_of::<T>() > self.capacity {
             return Err(Error::InvalidOffsetPtr);
         }
@@ -130,14 +95,14 @@ impl<M: lock_api::RawMutex, O: talc::OomHandler> AllocImpl<M, O> {
         Ok(Foreign { ptr: offset })
     }
 
-    fn get<T: TypeHash>(&self, ptr: &OffsetPtr<T>) -> &T {
+    fn get<T: TypeSignature>(&self, ptr: &OffsetPtr<T>) -> &T {
         let addr = self.base + ptr.offset as u64;
         let ptr = addr.as_ptr::<T>().cast_mut();
         unsafe { ptr.as_ref().unwrap() }
     }
 
     /// Transform a Foreign<T> to a NonNull<T>
-    fn get_non_null<T: TypeHash>(&self, foreign: &Foreign<T>) -> NonNull<T> {
+    fn get_non_null<T: TypeSignature>(&self, foreign: &Foreign<T>) -> NonNull<T> {
         let addr = self.base + foreign.ptr.offset as u64;
         let ptr = addr.as_ptr::<T>().cast_mut();
         // SAFETY: can be unchecked, as Foreign<T> was constructed by this allocator and null ptr
@@ -146,7 +111,7 @@ impl<M: lock_api::RawMutex, O: talc::OomHandler> AllocImpl<M, O> {
     }
 
     /// Transform a NonNull<T> to an OffsetPtr<T>
-    pub fn ptr_offset<T: TypeHash>(&self, ptr: NonNull<T>) -> OffsetPtr<T> {
+    pub fn ptr_offset<T: TypeSignature>(&self, ptr: NonNull<T>) -> OffsetPtr<T> {
         let offset = ptr.as_ptr() as u64 - self.base.as_u64();
         OffsetPtr::from(offset as u32)
     }
@@ -179,7 +144,7 @@ pub fn init(owning: Arena, foreign: Arena) {
 /// remote peer. The peer will free the allocated memory if the data is dropped. The original
 /// allocator can also drop it, but should only be done if one can ensure that the peer will not
 /// use the memory anymore.
-pub unsafe fn alloc<T: TypeHash>() -> Result<Owned<T>, Error> {
+pub unsafe fn alloc<T: TypeSignature>() -> Result<Owned<T>, Error> {
     unsafe {
         match ALLOC_OWN.get() {
             Some(alloc) => alloc.alloc(),
@@ -203,7 +168,7 @@ pub unsafe fn alloc_buf(size: usize) -> Result<OwnedBuf, Error> {
 
 /// Deallocate a type allocated by `alloc`. Make sure to only call this if one can ensure that the
 /// peer will not use the memory anymore.
-pub fn dealloc<T: TypeHash>(ptr: NonNull<T>) {
+pub fn dealloc<T: TypeSignature>(ptr: NonNull<T>) {
     match ALLOC_OWN.get() {
         Some(alloc) => alloc.dealloc(ptr),
         None => return,
@@ -219,7 +184,7 @@ pub fn dealloc_buf(buf: OwnedBuf) {
     }
 }
 
-pub unsafe fn get_foreign<T: TypeHash>(ptr: OffsetPtr<T>) -> Result<Foreign<T>, Error> {
+pub unsafe fn get_foreign<T: TypeSignature>(ptr: OffsetPtr<T>) -> Result<Foreign<T>, Error> {
     match ALLOC_FOREIGN.get() {
         Some(alloc) => alloc.get_foreign(ptr),
         None => Err(Error::UninitializedAllocator),
@@ -245,12 +210,12 @@ impl From<u32> for RawOffsetPtr {
 }
 
 #[repr(transparent)]
-pub struct OffsetPtr<T: TypeHash> {
+pub struct OffsetPtr<T: TypeSignature> {
     pub offset: u32,
     _marker: core::marker::PhantomData<T>,
 }
 
-impl<T: TypeHash> From<u32> for OffsetPtr<T> {
+impl<T: TypeSignature> From<u32> for OffsetPtr<T> {
     fn from(value: u32) -> Self {
         Self {
             offset: value,
@@ -259,42 +224,30 @@ impl<T: TypeHash> From<u32> for OffsetPtr<T> {
     }
 }
 
-impl<T: TypeHash> From<RawOffsetPtr> for OffsetPtr<T> {
+impl<T: TypeSignature> From<RawOffsetPtr> for OffsetPtr<T> {
     fn from(ptr: RawOffsetPtr) -> Self {
         Self::from(ptr.inner)
     }
 }
 
-impl<T: TypeHash> TypeHash for OffsetPtr<T> {
-    const TYPE_HASH: u64 = {
+impl<T: TypeSignature> TypeSignature for OffsetPtr<T> {
+    const SIGNATURE: u64 = {
         let mut h = crate::hash::Djb2::new();
         h.write(0u64.to_le_bytes().as_slice());
         h.write(b"OffsetPtr");
-        h.write(<T as TypeHash>::TYPE_HASH.to_le_bytes().as_slice());
+        h.write(<T as TypeSignature>::SIGNATURE.to_le_bytes().as_slice());
         h.finish()
     };
     const IS_PRIMITIVE: bool = false;
 }
 
 /// Owned allocation for future sharing with the VMI peer.
-pub struct Owned<T: TypeHash> {
+pub struct Owned<T: TypeSignature> {
     inner: NonNull<T>,
 }
 
-impl<T: TypeHash> AsRef<T> for Owned<T> {
-    fn as_ref(&self) -> &T {
-        unsafe { self.inner.as_ref() }
-    }
-}
-
-impl<T: TypeHash> AsMut<T> for Owned<T> {
-    fn as_mut(&mut self) -> &mut T {
-        unsafe { self.inner.as_mut() }
-    }
-}
-
-impl<T: TypeHash> Into<Shared<T>> for Owned<T> {
-    fn into(self) -> Shared<T> {
+impl<T: TypeSignature> Owned<T> {
+    pub fn into_shared(self) -> Shared<T> {
         let alloc = ALLOC_OWN.get().unwrap();
         Shared {
             inner: alloc.ptr_offset(self.inner),
@@ -302,32 +255,49 @@ impl<T: TypeHash> Into<Shared<T>> for Owned<T> {
     }
 }
 
+impl<T: TypeSignature> AsRef<T> for Owned<T> {
+    fn as_ref(&self) -> &T {
+        unsafe { self.inner.as_ref() }
+    }
+}
+
+impl<T: TypeSignature> AsMut<T> for Owned<T> {
+    fn as_mut(&mut self) -> &mut T {
+        unsafe { self.inner.as_mut() }
+    }
+}
+
 #[repr(transparent)]
-pub struct Shared<T: TypeHash> {
+pub struct Shared<T: TypeSignature> {
     inner: OffsetPtr<T>,
 }
 
-impl<T: TypeHash> TypeHash for Shared<T> {
-    const TYPE_HASH: u64 = {
+impl<T: TypeSignature> From<Owned<T>> for Shared<T> {
+    fn from(owned: Owned<T>) -> Self {
+        let alloc = ALLOC_OWN.get().unwrap();
+        Shared {
+            inner: alloc.ptr_offset(owned.inner),
+        }
+    }
+}
+
+impl<T: TypeSignature> TypeSignature for Shared<T> {
+    const SIGNATURE: u64 = {
         let mut h = crate::hash::Djb2::new();
         h.write(0u64.to_le_bytes().as_slice());
         h.write(b"Shared");
-        h.write(<T as TypeHash>::TYPE_HASH.to_le_bytes().as_slice());
+        h.write(<T as TypeSignature>::SIGNATURE.to_le_bytes().as_slice());
         h.finish()
     };
     const IS_PRIMITIVE: bool = false;
 }
 
 #[sealed::sealed]
-unsafe impl<T: TypeHash> OwnedShareable for Shared<T> {
-    #[inline(always)]
-    unsafe fn write(&self) {
-        unsafe {
-            asm!(
-            "mov {0:e}, ebx",
-            in(reg) self.inner.offset,
-            options(nostack, preserves_flags)
-            )
+impl<T: TypeSignature> OwnedShareable for Shared<T> {
+    fn into_transport(self) -> Transport {
+        Transport {
+            primary: self.inner.offset as u64,
+            secondary: 0,
         }
     }
 }
@@ -344,6 +314,16 @@ impl OwnedBuf {
     fn new(ptr: NonNull<u8>, capacity: NonZeroUsize) -> Self {
         Self { ptr, capacity }
     }
+
+    pub fn into_shared(self) -> SharedBuf {
+        let alloc = ALLOC_OWN.get().unwrap();
+        let offset = alloc.ptr_offset(self.ptr);
+
+        SharedBuf {
+            ptr: offset,
+            capacity: self.capacity,
+        }
+    }
 }
 
 impl AsRef<[u8]> for OwnedBuf {
@@ -358,37 +338,25 @@ impl AsMut<[u8]> for OwnedBuf {
     }
 }
 
-impl Into<SharedBuf> for OwnedBuf {
-    fn into(self) -> SharedBuf {
-        let alloc = ALLOC_OWN.get().unwrap();
-        let offset = alloc.ptr_offset(self.ptr.cast());
-
-        SharedBuf {
-            ptr: offset,
-            capacity: self.capacity,
-        }
-    }
-}
-
 /// Shared buffer allocated for sharing with the VMI peer.
 pub struct SharedBuf {
     ptr: OffsetPtr<u8>,
     capacity: NonZeroUsize,
 }
 
-impl TypeHash for SharedBuf {
-    const TYPE_HASH: u64 = {
+impl TypeSignature for SharedBuf {
+    const SIGNATURE: u64 = {
         let mut h = crate::hash::Djb2::new();
         h.write(0u64.to_le_bytes().as_slice());
         h.write(b"SharedBuf");
         h.write(
-            <OffsetPtr<u8> as TypeHash>::TYPE_HASH
+            <OffsetPtr<u8> as TypeSignature>::SIGNATURE
                 .to_le_bytes()
                 .as_slice(),
         );
         h.write(1u64.to_le_bytes().as_slice());
         h.write(
-            <NonZeroUsize as TypeHash>::TYPE_HASH
+            <NonZeroUsize as TypeSignature>::SIGNATURE
                 .to_le_bytes()
                 .as_slice(),
         );
@@ -398,41 +366,35 @@ impl TypeHash for SharedBuf {
 }
 
 #[sealed::sealed]
-unsafe impl OwnedShareable for SharedBuf {
-    #[inline(always)]
-    unsafe fn write(&self) {
-        unsafe {
-            asm!(
-                "mov {0:e}, ebx",
-                "mov {1}, rcx",
-                in(reg) self.ptr.offset,
-                in(reg) self.capacity.get(),
-                options(nostack, preserves_flags)
-            )
+impl OwnedShareable for SharedBuf {
+    fn into_transport(self) -> Transport {
+        Transport {
+            primary: self.ptr.offset as u64,
+            secondary: self.capacity.get() as u64,
         }
     }
 }
 
 /// Foreign memory allocated by the VMI peer.
 /// This wraps a raw pointer and manages deallocation on drop.
-pub struct Foreign<T: TypeHash> {
+pub struct Foreign<T: TypeSignature> {
     ptr: OffsetPtr<T>,
 }
 
-impl<T: TypeHash> Foreign<T> {
+impl<T: TypeSignature> Foreign<T> {
     /// Get the underlying value of the pointer.
     pub fn get(&self) -> &T {
         ALLOC_FOREIGN.get().unwrap().get(&self.ptr)
     }
 }
 
-impl<T: TypeHash> TypeHash for Foreign<T> {
-    const TYPE_HASH: u64 = {
+impl<T: TypeSignature> TypeSignature for Foreign<T> {
+    const SIGNATURE: u64 = {
         let mut h = crate::hash::Djb2::new();
         h.write(0u64.to_le_bytes().as_slice());
         h.write(b"Foreign");
         h.write(
-            <OffsetPtr<T> as TypeHash>::TYPE_HASH
+            <OffsetPtr<T> as TypeSignature>::SIGNATURE
                 .to_le_bytes()
                 .as_slice(),
         );
@@ -441,24 +403,30 @@ impl<T: TypeHash> TypeHash for Foreign<T> {
     const IS_PRIMITIVE: bool = false;
 }
 
-impl<T: TypeHash> TypeHash for &Foreign<T> {
-    const TYPE_HASH: u64 = {
-        let mut h = crate::hash::Djb2::from_partial(Foreign::<T>::TYPE_HASH);
+impl<T: TypeSignature> TypeSignature for &Foreign<T> {
+    const SIGNATURE: u64 = {
+        let mut h = crate::hash::Djb2::from_partial(Foreign::<T>::SIGNATURE);
         h.write(b"&Foreign");
         h.finish()
     };
     const IS_PRIMITIVE: bool = false;
 }
 
-#[sealed::sealed]
-impl<T: TypeHash> ForeignShareable for Foreign<T> {}
-
-impl<T: TypeHash> Drop for Foreign<T> {
+impl<T: TypeSignature> Drop for Foreign<T> {
     fn drop(&mut self) {
         // unwrap is safe because the allocator is needed to even construct the foreign pointer
         let alloc = ALLOC_FOREIGN.get().unwrap();
         let ptr = alloc.get_non_null(self);
         alloc.dealloc(ptr);
+    }
+}
+
+#[sealed::sealed]
+impl<T: TypeSignature> ForeignShareable for Foreign<T> {
+    fn from_transport(t: Transport) -> Result<Self, ExitCode> {
+        let raw = RawOffsetPtr::from(t.primary as u32);
+        let ptr = OffsetPtr::from(raw);
+        unsafe { get_foreign(ptr).map_err(|_| ExitCode::Ptr(raw)) }
     }
 }
 
@@ -476,19 +444,19 @@ impl AsRef<[u8]> for ForeignBuf {
     }
 }
 
-impl TypeHash for ForeignBuf {
-    const TYPE_HASH: u64 = {
+impl TypeSignature for ForeignBuf {
+    const SIGNATURE: u64 = {
         let mut h = crate::hash::Djb2::new();
         h.write(0u64.to_le_bytes().as_slice());
         h.write(b"ForeignBuf");
         h.write(
-            <OffsetPtr<u8> as TypeHash>::TYPE_HASH
+            <OffsetPtr<u8> as TypeSignature>::SIGNATURE
                 .to_le_bytes()
                 .as_slice(),
         );
         h.write(1u64.to_le_bytes().as_slice());
         h.write(
-            <NonZeroUsize as TypeHash>::TYPE_HASH
+            <NonZeroUsize as TypeSignature>::SIGNATURE
                 .to_le_bytes()
                 .as_slice(),
         );
@@ -497,9 +465,9 @@ impl TypeHash for ForeignBuf {
     const IS_PRIMITIVE: bool = false;
 }
 
-impl TypeHash for &ForeignBuf {
-    const TYPE_HASH: u64 = {
-        let mut h = crate::hash::Djb2::from_partial(ForeignBuf::TYPE_HASH);
+impl TypeSignature for &ForeignBuf {
+    const SIGNATURE: u64 = {
+        let mut h = crate::hash::Djb2::from_partial(ForeignBuf::SIGNATURE);
         h.write(b"&ForeignBuf");
         h.finish()
     };
@@ -507,4 +475,114 @@ impl TypeHash for &ForeignBuf {
 }
 
 #[sealed::sealed]
-impl ForeignShareable for ForeignBuf {}
+impl ForeignShareable for ForeignBuf {
+    fn from_transport(t: Transport) -> Result<Self, ExitCode> {
+        if t.secondary == 0 {
+            return Err(ExitCode::ZeroCapacity);
+        }
+
+        let raw_capacity = t.secondary as usize;
+        let capacity = NonZeroUsize::new(raw_capacity).ok_or(ExitCode::ZeroCapacity)?;
+
+        Ok(ForeignBuf {
+            ptr: Foreign::<u8>::from_transport(t)?,
+            capacity,
+        })
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[repr(C)]
+pub struct Transport {
+    /// primary can be a u32 offset pointer or a primitive integer/float/bool value
+    pub primary: u64,
+    /// secondary is optional, it is only used as the capacity if a buffer is shared.
+    /// If unused, should be 0
+    pub secondary: u64,
+}
+
+impl Transport {
+    pub fn new(primary: u64, secondary: u64) -> Self {
+        Self { primary, secondary }
+    }
+}
+
+#[sealed::sealed]
+pub trait OwnedShareable {
+    fn into_transport(self) -> Transport;
+}
+
+#[sealed::sealed]
+pub trait ForeignShareable {
+    fn from_transport(t: Transport) -> Result<Self, ExitCode>
+    where
+        Self: Sized;
+}
+
+#[sealed::sealed]
+impl OwnedShareable for () {
+    fn into_transport(self) -> Transport {
+        Transport {
+            primary: 0,
+            secondary: 0,
+        }
+    }
+}
+
+#[sealed::sealed]
+impl ForeignShareable for () {
+    fn from_transport(_: Transport) -> Result<Self, ExitCode> {
+        Ok(())
+    }
+}
+
+macro_rules! impl_owned_shareable_for_primitives {
+    ($($prim:ty),* $(,)?) => {
+        $(
+            #[sealed::sealed]
+            impl OwnedShareable for $prim {
+                #[inline(always)]
+                fn into_transport(self) -> Transport {
+                    Transport {
+                        primary: self as u64,
+                        secondary: 0,
+                    }
+                }
+            }
+        )*
+    };
+}
+
+macro_rules! impl_foreign_shareable_for_primitives {
+    ($($prim:ty),* $(,)?) => {
+        $(
+            #[sealed::sealed]
+            impl ForeignShareable for $prim {
+                 fn from_transport(t: Transport) -> Result<Self, ExitCode> {
+                   Ok(t.primary as $prim)
+                 }
+            }
+        )*
+    };
+}
+
+impl_owned_shareable_for_primitives!(
+    u8, u16, u32, u64, u128, i8, i16, i32, i64, i128, f32, f64, usize, bool, char
+);
+impl_foreign_shareable_for_primitives!(
+    u8, u16, u32, u64, u128, i8, i16, i32, i64, i128, f32, f64, usize
+);
+
+#[sealed::sealed]
+impl ForeignShareable for bool {
+    fn from_transport(t: Transport) -> Result<Self, ExitCode> {
+        Ok(t.primary != 0)
+    }
+}
+
+#[sealed::sealed]
+impl ForeignShareable for char {
+    fn from_transport(t: Transport) -> Result<Self, ExitCode> {
+        Ok(t.primary as u8 as char)
+    }
+}

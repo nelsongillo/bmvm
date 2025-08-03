@@ -7,17 +7,19 @@
 extern crate alloc;
 extern crate core;
 
-use crate::mem::PhysAddr;
+#[cfg(all(feature = "vmi-consume", feature = "vmi-execute"))]
+compile_error!("Features `vmi-consume` and `vmi-execute` cannot be enabled at the same time.");
 
 pub mod error;
 pub mod hash;
 pub mod interprete;
 pub mod mem;
 pub mod registry;
-mod typehash;
+mod typesignature;
 pub mod vmi;
 
-pub use typehash::TypeHash;
+use crate::mem::PhysAddr;
+pub use crate::typesignature::TypeSignature;
 
 /// The ELF section name for the metadata containing the call guest required function information.
 pub const BMVM_META_SECTION_HOST: &str = ".bmvm.vmi.host";

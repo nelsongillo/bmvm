@@ -10,19 +10,21 @@ use bmvm_common::mem::LayoutTableEntry;
 use core::arch::asm;
 
 pub use panic::{exit_with_code, halt, panic, panic_with_code};
+pub use vmi::hypercall;
 
 pub use bmvm_common::error::ExitCode;
 pub use bmvm_common::hash::Djb2;
 pub use bmvm_common::mem::{
     Foreign, ForeignBuf, ForeignShareable, OffsetPtr, Owned, OwnedBuf, OwnedShareable,
-    RawOffsetPtr, Shared, SharedBuf, alloc, alloc_buf, dealloc, dealloc_buf, get_foreign,
+    RawOffsetPtr, Shared, SharedBuf, Transport, alloc, alloc_buf, dealloc, dealloc_buf,
+    get_foreign,
 };
 pub use bmvm_common::vmi::{Signature, UpcallFn};
 // re-export: bmvm-common
-pub use bmvm_common::TypeHash;
+pub use bmvm_common::TypeSignature;
 
 // re-export: bmvm-macros
-pub use bmvm_macros::TypeHash;
+pub use bmvm_macros::TypeSignature;
 pub use bmvm_macros::{entry, expose_guest as expose, host};
 
 unsafe extern "C" {

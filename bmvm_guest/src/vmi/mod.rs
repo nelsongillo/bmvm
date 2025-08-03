@@ -1,7 +1,7 @@
 mod hypercall;
 mod upcall;
 
-use bmvm_common::TypeHash;
+use bmvm_common::TypeSignature;
 use bmvm_common::interprete::Interpret;
 pub use hypercall::*;
 pub use upcall::*;

@@ -1,7 +1,7 @@
+use crate::vmi::Signature;
 use core::convert::TryFrom;
 use core::result::Result;
 use sealed::sealed;
-use crate::vmi::Signature;
 
 pub const META_PREFIX_HOST: &str = "BMVM_CALL_HOST_META_";
 pub const META_PREFIX_GUEST: &str = "BMVM_CALL_GUEST_META_";

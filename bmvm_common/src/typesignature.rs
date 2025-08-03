@@ -1,15 +1,15 @@
 use core::num::NonZeroUsize;
 
-pub trait TypeHash: Send + Sync {
-    const TYPE_HASH: u64;
+pub trait TypeSignature: Send + Sync {
+    const SIGNATURE: u64;
     const IS_PRIMITIVE: bool;
 }
 
 macro_rules! impl_type_hash_for_primitive {
     ($($prim:ty => $str:expr),* $(,)?) => {
         $(
-            impl TypeHash for $prim {
-                const TYPE_HASH: u64 = {
+            impl TypeSignature for $prim {
+                const SIGNATURE: u64 = {
                     let mut h = crate::hash::Djb2::new();
                     h.write(0u64.to_le_bytes().as_slice());
                     h.write($str.as_bytes());
@@ -21,11 +21,11 @@ macro_rules! impl_type_hash_for_primitive {
     };
 }
 
-impl TypeHash for NonZeroUsize {
-    const TYPE_HASH: u64 = {
+impl TypeSignature for NonZeroUsize {
+    const SIGNATURE: u64 = {
         let mut h = crate::hash::Djb2::new();
         h.write(0u64.to_le_bytes().as_slice());
-        h.write(usize::TYPE_HASH.to_le_bytes().as_slice());
+        h.write(usize::SIGNATURE.to_le_bytes().as_slice());
         h.finish()
     };
     const IS_PRIMITIVE: bool = true;

@@ -1,4 +1,5 @@
 use bmvm_common::error::ExitCode;
+use bmvm_common::mem::Transport;
 use core::arch::asm;
 use core::panic::PanicInfo;
 
@@ -16,6 +17,19 @@ pub fn exit_with_code(code: ExitCode) -> ! {
             "hlt",
             in("al") code.as_u8(),
             options(nomem, nostack, preserves_flags),
+        );
+        loop {}
+    }
+}
+
+pub fn exit_with_transport(transport: Transport) -> ! {
+    unsafe {
+        asm!(
+        "hlt",
+        in("al") ExitCode::Normal.as_u8(),
+        in("r8") transport.primary,
+        in("r9") transport.secondary,
+        options(nomem, nostack, preserves_flags),
         );
         loop {}
     }

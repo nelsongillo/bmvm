@@ -1,14 +1,16 @@
-use crate::util::{find_crate, get_link_name};
-
-use crate::guest::gen_call_meta_debug;
-use crate::guest::util::{create_fn_call, gen_callmeta};
+use crate::common::{MOTHER_CRATE, construct_idents, create_fn_call, extract_params, suffix};
+use crate::common::{find_crate, get_link_name};
+use crate::guest::{
+    CallDirection, ParamType, VAR_NAME_PARAM, VAR_NAME_TRANSPORT, gen_call_meta_debug,
+    gen_callmeta, process_params,
+};
 use bmvm_common::BMVM_META_SECTION_HOST;
 use proc_macro::TokenStream;
-use proc_macro2::Ident;
+use proc_macro2::{Ident, Span, TokenStream as TS};
 use quote::quote;
 use syn::Error;
 use syn::spanned::Spanned;
-use syn::{ForeignItem, ForeignItemFn, ItemForeignMod, parse_macro_input};
+use syn::{ForeignItem, ItemForeignMod, parse_macro_input};
 
 pub fn host_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // Parse the input as a foreign module (extern block)
@@ -29,10 +31,16 @@ pub fn host_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
         .into();
     }
 
+    // bmvm-(guest|host) crate
+    let mother = match find_crate(MOTHER_CRATE) {
+        Ok(x) => x,
+        Err(e) => return e.to_compile_error().into(),
+    };
+
     // Process each function in the extern block
     let stubs = foreign_mod.items.iter().filter_map(|item| match item {
         ForeignItem::Fn(func) => {
-            let fn_name = get_link_name(&func.attrs).unwrap_or_else(|| func.sig.ident.to_string());
+            let fn_name = get_link_name(&func.attrs).unwrap_or_else(|| func.sig.ident.clone());
 
             // vmi metadata generation
             let fn_call = create_fn_call(&func.attrs, &func.sig);
@@ -44,38 +52,69 @@ pub fn host_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
             let (fn_call, params, return_type) = fn_call.unwrap();
 
             // generate call meta static data
-            let callmeta = gen_callmeta(
-                func.span(),
+            let (callmeta, fn_sig) = match gen_callmeta(
                 fn_call,
                 params,
                 return_type,
-                fn_name.as_str(),
+                fn_name.to_string().as_str(),
                 BMVM_META_SECTION_HOST,
-            );
-            if callmeta.is_err() {
-                return Error::new(func.span(), callmeta.unwrap_err().to_string())
-                    .to_compile_error()
-                    .into();
-            }
-            let (meta, fn_sig_ident) = callmeta.unwrap();
+            ) {
+                Ok(x) => x,
+                Err(e) => return e.to_compile_error().into(),
+            };
 
-            // vmi hypercall stub generation
-            let stub = gen_stub(func, fn_sig_ident);
-            if stub.is_err() {
-                return Error::new(func.span(), stub.unwrap_err().to_string())
-                    .to_compile_error()
-                    .into();
-            }
-            let stub = stub.unwrap();
+            let (_, transport_struct, _) = construct_idents(&fn_name, suffix().as_str());
+
+            // Parameter processing
+            let params = extract_params(&func.sig);
+            let param_type = match process_params(
+                &mother,
+                &transport_struct,
+                &params,
+                CallDirection::Guest2Host,
+            ) {
+                Ok(x) => x,
+                Err(e) => return e.to_compile_error().into(),
+            };
+
+            // optional transport struct definition
+            let def_transport_struct = match &param_type {
+                ParamType::MultipleValues {
+                    struct_definition, ..
+                } => struct_definition.clone(),
+                _ => quote! {},
+            };
+
+            // function construction
+            let fn_vis = &func.vis;
+            let fn_params = &func.sig.inputs;
+            let (fn_return, union_return) = match &func.sig.output {
+                syn::ReturnType::Default => (quote! {()}, true),
+                syn::ReturnType::Type(_, ty) => (quote! {#ty}, false),
+            };
+            let transport = gen_transport(&mother, &param_type);
+            let body = gen_body(&mother, &fn_return, &fn_sig, transport, union_return).unwrap();
+            let where_clause = if let ParamType::Value { ensure_trait, .. } = &param_type {
+                quote! {where #ensure_trait}
+            } else {
+                quote! {}
+            };
 
             Some(quote! {
-                #meta
-                #stub
+                #callmeta
+                #def_transport_struct
+
+                #fn_vis fn #fn_name(#fn_params) -> #fn_return
+                #where_clause
+                {
+                    #body
+                }
             })
         }
         _ => None,
     });
 
+    // optional one time debug segment for the whole block
     let debug = gen_call_meta_debug();
     // Combine all the stubs and generate the final output
     let expanded = quote! {
@@ -86,27 +125,77 @@ pub fn host_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-// TODO:
-//  * transport struct
-//  * alloc in shared memory and populate transport struct
-//  * pass transport struct to hypercall via register
-//  * hypercall implementation
-//  * return value handling
+/// Generate code which reads EBX register for the offset ptr and builds the Foreign<T> for
+/// the function params
+fn gen_body(
+    mother: &Ident,
+    ty_return: &TS,
+    sig: &Ident,
+    transport: TS,
+    uinion_return: bool,
+) -> Result<TS, Error> {
+    let foreign_shareable = quote! {#mother::ForeignShareable};
+    let exit_with_code = quote! {#mother::exit_with_code};
+    let execute = quote! {#mother::hypercall};
+    let var_transport = Ident::new(VAR_NAME_TRANSPORT, Span::call_site());
 
-/// gen_stub generates the call to the hypercall implementation
-fn gen_stub(func: &ForeignItemFn, fn_sig_ident: Ident) -> anyhow::Result<proc_macro2::TokenStream> {
-    let vis = &func.vis;
-    let sig = &func.sig;
-    // let ident = &sig.ident;
-
-    // let call_id = meta.id();
-    let crate_bmvm = find_crate("bmvm-guest")?;
-    let exec_hypercall = quote! {#crate_bmvm::exec_hypercall};
-
-    // Generate the stub implementation
-    Ok(quote! {
-        #vis #sig{
-            // #exec_hypercall(#fn_sig_ident);
+    let body = if uinion_return {
+        quote! {
+            #transport
+            unsafe { #execute(#sig, #var_transport); }
         }
-    })
+    } else {
+        quote! {
+            #transport
+            let result = unsafe { #execute(#sig, #var_transport) };
+            use #foreign_shareable;
+            return match #ty_return::from_transport(result) {
+                Ok(ret) => ret,
+                Err(e) => #exit_with_code(e),
+            }
+        }
+    };
+    Ok(body)
+}
+
+fn gen_transport(mother: &Ident, param: &ParamType) -> TS {
+    let alloc_owned = quote! {#mother::alloc};
+    let exit_with_code = quote! {#mother::exit_with_code};
+    let exit_code_alloc = quote! {#mother::ExitCode::AllocatorFailed};
+    let owned_shareable = quote! {#mother::OwnedShareable};
+    let transport = Ident::new(VAR_NAME_TRANSPORT, Span::call_site());
+    let params = Ident::new(VAR_NAME_PARAM, Span::call_site());
+
+    match param {
+        ParamType::Void => {
+            quote! {
+                use #owned_shareable;
+                let #transport = ().into_transport();
+            }
+        }
+        ParamType::Value { name, .. } => {
+            quote! {
+                use #owned_shareable;
+                let #transport = #name.into_transport();
+            }
+        }
+        ParamType::MultipleValues {
+            ty: struct_ident,
+            packaging,
+            ..
+        } => {
+            quote! {
+                let mut owned_params = match unsafe { #alloc_owned::<#struct_ident>() } {
+                    Ok(m) => m,
+                    Err(_) => #exit_with_code(#exit_code_alloc),
+                };
+                let mut #params = owned_params.as_mut();
+                #(#packaging)*
+
+                let shared_params = owned_params.into_shared();
+                use #owned_shareable;
+                let #transport = shared_params.into_transport();
+            }
+        }
+    }
 }

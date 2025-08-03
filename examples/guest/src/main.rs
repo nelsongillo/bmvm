@@ -1,39 +1,59 @@
 #![no_std]
 #![no_main]
 
-use bmvm_guest::{Foreign, ForeignBuf, TypeHash, entry, expose, host};
+use bmvm_guest::Foreign;
+use bmvm_guest::{ForeignBuf, Shared, SharedBuf, alloc_buf};
+use bmvm_guest::{TypeSignature, entry, expose, host};
 
 #[repr(transparent)]
-#[derive(TypeHash)]
+#[derive(TypeSignature)]
 struct Foo(Bar);
 
 #[repr(C)]
-#[derive(TypeHash)]
+#[derive(TypeSignature)]
 struct Bar {
     a: u32,
     b: u32,
 }
 
+/*
 #[host]
 unsafe extern "C" {
-    fn foo(_b: Bar, _f: Foo);
-    fn another(_a: u32, _b: u32);
+    fn a();
+    fn b(a: u32);
+    fn c(a: Shared<Foo>);
+    fn d(a: SharedBuf);
+    fn e() -> u32;
+    fn f(a: u32) -> u32;
+    fn g(a: u32, b: i32) -> u32;
+}
+*/
+
+#[expose]
+extern "C" fn h() {}
+
+#[expose]
+extern "C" fn i(a: u32) {}
+
+#[expose]
+extern "C" fn j(a: u32) {}
+
+#[expose]
+extern "C" fn k(a: ForeignBuf) {}
+
+#[expose]
+extern "C" fn l(a: Foreign<Foo>) {}
+
+#[expose]
+extern "C" fn m(a: u32) -> u32 {
+    0u32
 }
 
 #[expose]
-fn argless() {}
-
-#[expose]
-fn with_params(a: u32, b: i64, c: bool, buf: &ForeignBuf, _v: &Foreign<Bar>) -> u64 {
-    let mut ret = a as u64 + b as u64;
-    for v in buf.as_ref() {
-        ret += *v as u64;
-    }
-    if c { ret + 1 } else { ret - 1 }
+extern "C" fn n(a: u32) -> SharedBuf {
+    let buf = unsafe { alloc_buf(16) }.ok().unwrap();
+    buf.into_shared()
 }
 
 #[entry]
-fn main() {
-    foo(Bar { a: 1, b: 2 }, Foo(Bar { a: 3, b: 4 }));
-    another(1, 2);
-}
+fn main() {}
