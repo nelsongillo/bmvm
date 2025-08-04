@@ -2,16 +2,16 @@
 #![no_std]
 #![no_main]
 
+mod hypercall;
 mod panic;
 mod setup;
-mod vmi;
 
-use bmvm_common::mem::LayoutTableEntry;
 use core::arch::asm;
 
+pub use hypercall::execute as hypercall;
 pub use panic::{exit_with_code, halt, panic, panic_with_code};
-pub use vmi::hypercall;
 
+// re-export: bmvm-common
 pub use bmvm_common::error::ExitCode;
 pub use bmvm_common::hash::Djb2;
 pub use bmvm_common::mem::{
@@ -20,8 +20,7 @@ pub use bmvm_common::mem::{
     get_foreign,
 };
 pub use bmvm_common::vmi::{Signature, UpcallFn};
-// re-export: bmvm-common
-pub use bmvm_common::TypeSignature;
+pub use bmvm_common::{HYPERCALL_IO_PORT, TypeSignature};
 
 // re-export: bmvm-macros
 pub use bmvm_macros::TypeSignature;
@@ -51,17 +50,4 @@ pub fn write_buf(port: u16, buf: &[u8], len: u16) {
         in("cx") len,
         );
     }
-}
-
-#[inline]
-fn write_u64(port: u16, value: u64) {
-    write_buf(port, value.to_le_bytes().as_slice(), 8);
-}
-
-fn write_lte(value: LayoutTableEntry) {
-    write_u64(0x1, value.as_u64());
-}
-
-fn write_addr(addr: u64) {
-    write_u64(0x2, addr);
 }

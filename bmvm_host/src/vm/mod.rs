@@ -1,3 +1,4 @@
+mod registry;
 mod setup;
 mod vcpu;
 mod vm;

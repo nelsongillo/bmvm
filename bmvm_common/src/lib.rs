@@ -21,6 +21,9 @@ pub mod vmi;
 use crate::mem::PhysAddr;
 pub use crate::typesignature::TypeSignature;
 
+/// The IO Port used for triggering hypercalls to host from the guest.
+pub const HYPERCALL_IO_PORT: u16 = 0x0434;
+
 /// The ELF section name for the metadata containing the call guest required function information.
 pub const BMVM_META_SECTION_HOST: &str = ".bmvm.vmi.host";
 /// The ELF section name for the metadata containing the call guest provided function information.

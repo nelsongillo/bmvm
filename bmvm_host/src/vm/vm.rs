@@ -1,19 +1,22 @@
 use crate::alloc::{Allocator, ReadWrite, Region, RegionCollection};
 use crate::elf::ExecBundle;
+use crate::linker::HypercallResult;
+use crate::vm::registry::FunctionRegistry;
 use crate::vm::vcpu::Vcpu;
-use crate::vm::{Config, setup, vcpu};
+use crate::vm::{Config, registry, setup, vcpu};
 use crate::{GUEST_STACK_ADDR, GUEST_SYSTEM_ADDR, GUEST_TMP_SYSTEM_SIZE};
+use bmvm_common::HYPERCALL_IO_PORT;
 use bmvm_common::error::ExitCode;
 use bmvm_common::mem::{
     Align, AlignedNonZeroUsize, DefaultAddrSpace, DefaultAlign, Flags, LayoutTableEntry, PhysAddr,
-    VirtAddr, align_floor, virt_to_phys,
+    Transport, VirtAddr, align_floor, virt_to_phys,
 };
 use bmvm_common::{
     BMVM_MEM_LAYOUT_TABLE, BMVM_TMP_GDT, BMVM_TMP_IDT, BMVM_TMP_PAGING, BMVM_TMP_SYS,
     region_abs_offset,
 };
 use kvm_bindings::KVM_API_VERSION;
-use kvm_ioctls::{Cap, Kvm, VcpuExit, VmFd};
+use kvm_ioctls::{Cap, HypercallExit, Kvm, VcpuExit, VmFd};
 use std::io::Write;
 
 type Result<T> = core::result::Result<T, Error>;
@@ -34,6 +37,8 @@ pub enum Error {
     VmMemoryMappingNotReadable(PhysAddr),
     #[error("Memory request exceeds max memory: {0}")]
     VmMemoryRequestExceedsMaxMemory(u64),
+    #[error("Error during hypercall execution")]
+    HypercallError(#[from] registry::Error),
     #[error("VCPU error: {0:?}")]
     Vcpu(#[from] vcpu::Error),
     #[error("Setup error: {0:?}")]
@@ -48,6 +53,7 @@ pub struct Vm {
     vm: VmFd,
     vcpu: Vcpu,
     manager: Allocator,
+    registry: FunctionRegistry,
     mem_mappings: RegionCollection,
 }
 
@@ -80,6 +86,7 @@ impl Vm {
             vm,
             vcpu,
             manager,
+            registry: FunctionRegistry::default(),
             mem_mappings: RegionCollection::new(),
         })
     }
@@ -162,6 +169,21 @@ impl Vm {
                             buf_2.clear();
                         }
                     }
+                    HYPERCALL_IO_PORT => {
+                        log::debug!("HYPERCALL TRIGGER");
+                        let mut regs = self.vcpu.get_regs()?;
+                        let sig = regs.rbx;
+                        let transport = Transport {
+                            primary: regs.r8,
+                            secondary: regs.r9,
+                        };
+                        log::debug!("Parameter: signature={}, transport={}", sig, transport);
+                        let output = self.registry.try_execute(sig, transport)?;
+                        regs.r8 = output.primary;
+                        regs.r9 = output.secondary;
+                        log::debug!("Result: transport={}", output);
+                        self.vcpu.set_regs(regs);
+                    }
                     _ => {
                         log::info!(
                             "IO write on port {:#x} with data {:X?} -> {}",
@@ -176,7 +198,7 @@ impl Vm {
                 }
                 VcpuExit::Hlt => {
                     log::info!("Halt called -> shutdown vm");
-                    let exit_code = ExitCode::from((self.vcpu.get_regs()?.rax & 0xFF) as u8);
+                    let exit_code = ExitCode::from((self.vcpu.read_regs()?.rax & 0xFF) as u8);
                     match exit_code {
                         ExitCode::Normal => log::info!("Normal exit"),
                         _ => log::error!("Exit Code: {:?}", exit_code),
@@ -185,7 +207,7 @@ impl Vm {
                     break;
                 }
                 VcpuExit::Debug(_) => {
-                    let rip = self.vcpu.get_regs()?.rip;
+                    let rip = self.vcpu.read_regs()?.rip;
                     log::debug!("Debug called with RIP: {:#x}", rip);
                     self.print_debug_info()?;
                     self.vcpu.enable_single_step()?
@@ -315,7 +337,7 @@ impl Vm {
     }
 
     fn print_debug_info(&mut self) -> Result<()> {
-        let (regs, sregs) = self.vcpu.get_all_regs()?;
+        let (regs, sregs) = self.vcpu.read_all_regs()?;
         log::debug!("RIP -> {:#x}", regs.rip);
         // Store the relevant register values to avoid holding the mutable borrow
         let cr2 = sregs.cr2;

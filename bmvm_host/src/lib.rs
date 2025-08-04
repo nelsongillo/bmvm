@@ -1,5 +1,6 @@
 #![feature(new_range_api)]
 #![feature(allocator_api)]
+#![feature(iterator_try_collect)]
 
 mod alloc;
 mod elf;
@@ -11,10 +12,21 @@ mod vm;
 use bmvm_common::mem::{AddrSpace, DefaultAddrSpace, align_floor};
 use std::sync::OnceLock;
 
-pub use bmvm_common::mem::{PhysAddr, align_ceil};
+pub use bmvm_common::hash::Djb2;
+pub use bmvm_common::mem::{
+    Foreign, ForeignBuf, ForeignShareable, Owned, OwnedBuf, OwnedShareable, Shared, SharedBuf,
+    Transport,
+};
+pub use bmvm_common::mem::{PhysAddr, align_ceil, alloc, alloc_buf, get_foreign};
 pub use bmvm_common::registry;
 pub use bmvm_common::vmi;
-pub use bmvm_macros::expose_guest as expose;
+// re-export bmvm-common
+pub use bmvm_common::TypeSignature;
+
+// re-export bmvm-macros
+pub use bmvm_macros::{TypeSignature, expose_host as expose};
+
+pub use linker::{CallableFunction, HypercallResult, WrapperFunc};
 pub use runtime::*;
 pub use vm::{Config, ConfigBuilder};
 

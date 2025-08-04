@@ -1,9 +1,11 @@
 use crate::elf::ExecBundle;
-use bmvm_common::vmi::{FnCall, HostVmiFn, Signature, Usage};
+use crate::linker::{CallableFunction, ConversionError, Function, Params};
+use bmvm_common::vmi::{FnCall, Signature};
+use bmvm_common::{TypeSignature, vmi};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 
-type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
 pub struct Errors<T: core::error::Error>(Vec<T>);
@@ -65,9 +67,12 @@ pub enum Error {
         guest: Signature,
         host: Signature,
     },
-    /// Error when a host function exists but is not utilized by the guest.
+    /// Error when a host function exists but is not used by the guest.
     #[error("Host function '{name}' is not used by guest.")]
     HostFunctionUnused { name: String },
+    /// Error if parsing the function metadata for a host-exposed function
+    #[error("Unable to parse function metadata: {0}")]
+    ParseError(#[from] ConversionError),
     /// A collection of multiple linking errors.
     #[error("Multiple linking errors occurred: {0:?}")]
     Joined(Errors<Error>),
@@ -106,13 +111,8 @@ impl Linker {
     }
 
     /// Performs the linking process by validating guest function calls against host implementations
-    /// and host-exposed functions against guest implementations.
-    ///
-    /// Two types of validations are executed:
-    /// 1. It checks if all functions the guest intends to `call` on the host side are present and
+    /// It checks if all functions the guest intends to `call` on the host side are present and
     /// their respective function signatures match.
-    /// 2. It checks if all `implementations` provided by the guest match their respective function
-    /// signatures.
     ///
     /// # Arguments
     /// * `bundle` - A reference to an `ExecBundle` containing the parsed guest execution context.
@@ -122,36 +122,13 @@ impl Linker {
     /// * `Ok(())` if all linking validations pass successfully.
     /// * `Err(Error)` containing a detailed list of all linking
     ///   errors encountered if any validation fails.
-
     pub(crate) fn link(&self, bundle: &ExecBundle) -> Result<()> {
-        let mut calls = Vec::new();
-        let mut implementations = Vec::new();
-        for func in inventory::iter::<HostVmiFn> {
-            match func.usage {
-                Usage::Impl => implementations.push(func.call.clone()),
-                Usage::Call => calls.push(func.call.clone()),
-            }
-        }
-
+        let mut calls: Vec<Function> = inventory::iter::<CallableFunction>()
+            .map(Function::try_from)
+            .try_collect::<Vec<Function>>()?;
         calls.sort();
-        implementations.sort();
 
-        let mut errors: Vec<Error> = Vec::new();
-        match self.validate_links(&calls, &bundle.host) {
-            Ok(_) => {}
-            Err(e) => errors.push(e),
-        };
-
-        match self.validate_links(&implementations, &bundle.expose) {
-            Ok(_) => {}
-            Err(e) => errors.push(e),
-        }
-
-        // If no errors were collected, return Ok(()). Otherwise, return the collected errors.
-        match errors.len() {
-            0 => Ok(()),
-            _ => Err(errors.into()),
-        }
+        self.validate_links(&calls, &bundle.host)
     }
 
     /// Validates the links between guest and host functions.
@@ -165,33 +142,29 @@ impl Linker {
     /// if any problems are found.
     ///
     /// # Arguments
-    /// * `host` - A slice of `FnCall` representing the functions available in the host.
+    /// * `host` - A slice of `Function` representing the functions available in the host.
     /// * `guest` - A slice of `FnCall` representing the functions expected/used by the guest.
     ///
     /// # Returns
     /// - `Ok(())` if all links are valid.
     /// - `Err(Error)` if a single error occurred
     /// - `Err(Error::Joined)` if multiple errors occurred
-    fn validate_links(&self, host: &[FnCall], guest: &[FnCall]) -> Result<()> {
+    fn validate_links(&self, host: &[Function], guest: &[FnCall]) -> Result<()> {
         let mut errors: Vec<Error> = Vec::new();
 
-        // Create a HashMap for efficient lookup of host functions by name and a HashSet to track which host functions are used by the guest.
-        let host_map: HashMap<String, Signature> = host
-            .iter()
-            // Convert CString name to String for HashMap key. Using unwrap() here assumes valid UTF-8 names.
-            .map(|f| (f.name.to_str().unwrap().to_string(), f.sig))
-            .collect();
+        let host_map: HashMap<String, Signature> =
+            host.iter().map(|f| (f.name.clone(), f.sig)).collect();
 
         let mut used_host_functions: HashSet<String> = HashSet::new();
 
-        // Iterate through guest functions to find missing ones or signature mismatches.
+        // iter through guest functions to find signature mismatches/missing ones
         for guest_fn in guest {
             let guest_name = guest_fn.name.to_str().unwrap().to_string();
             match host_map.get(&guest_name) {
                 Some(&host_sig) => {
-                    // Function found in host, mark its name as used.
+                    // Function found in host, mark its name as used
                     used_host_functions.insert(guest_name.clone());
-                    // Check for signature mismatch.
+                    // Check for signature mismatch
                     if guest_fn.sig != host_sig {
                         errors.push(Error::SignatureMismatch {
                             name: guest_name,
@@ -201,7 +174,7 @@ impl Linker {
                     }
                 }
                 None => {
-                    // Guest function not found in host.
+                    // Guest function not found in host
                     errors.push(Error::GuestFunctionMissing {
                         name: guest_name,
                         sig: guest_fn.sig,
@@ -210,21 +183,23 @@ impl Linker {
             }
         }
 
-        // Iterate through host functions to find any that are not utilized by the guest.
+        // Iterate through host functions to find any that are not used by the guest.
         for host_fn in host {
-            let host_name = host_fn.name.to_str().unwrap().to_string();
-            if !used_host_functions.contains(&host_name) {
+            if !used_host_functions.contains(&host_fn.name) {
                 if !self.cfg.error_unused_host_functions {
-                    log::warn!("Host function '{host_name}' is not used by guest.");
+                    log::warn!("Host function '{}' is not used by guest.", host_fn.name);
                 } else {
-                    errors.push(Error::HostFunctionUnused { name: host_name });
+                    errors.push(Error::HostFunctionUnused {
+                        name: host_fn.name.clone(),
+                    });
                 }
             }
         }
 
-        // If no errors were collected, return Ok(()). Otherwise, return the collected errors.
+        // Join present errors
         match errors.len() {
             0 => Ok(()),
+            1 => Err(errors.remove(0)),
             _ => Err(errors.into()),
         }
     }

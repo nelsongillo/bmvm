@@ -6,10 +6,12 @@ pub use meta::*;
 
 pub type Signature = u64;
 
+pub type Function = extern "C" fn() -> ();
+
 #[repr(C)]
 pub struct UpcallFn {
     pub sig: Signature,
-    pub func: extern "C" fn() -> (),
+    pub func: Function,
 }
 
 unsafe extern "C" {

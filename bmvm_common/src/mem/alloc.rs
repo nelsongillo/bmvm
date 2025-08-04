@@ -2,6 +2,7 @@ use crate::error::ExitCode;
 use crate::mem::{AlignedNonZeroUsize, VirtAddr};
 use crate::typesignature::TypeSignature;
 use core::alloc::{Allocator, Layout};
+use core::fmt::{Binary, Display, Formatter};
 use core::num::NonZeroUsize;
 use core::ptr::NonNull;
 use spin::once::Once;
@@ -195,6 +196,13 @@ pub unsafe fn get_foreign<T: TypeSignature>(ptr: OffsetPtr<T>) -> Result<Foreign
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct RawOffsetPtr {
     inner: u32,
+}
+
+#[cfg(feature = "vmi-consume")]
+impl Display for RawOffsetPtr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.inner)
+    }
 }
 
 impl RawOffsetPtr {
@@ -499,6 +507,13 @@ pub struct Transport {
     /// secondary is optional, it is only used as the capacity if a buffer is shared.
     /// If unused, should be 0
     pub secondary: u64,
+}
+
+#[cfg(feature = "vmi-consume")]
+impl Display for Transport {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 impl Transport {

@@ -1,16 +1,24 @@
 use crate::mem::RawOffsetPtr;
 use crate::vmi::Signature;
+use core::fmt::{Display, Formatter};
 use x86_64::structures::paging::PageSize;
 use x86_64::structures::paging::mapper::MapToError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExitCode {
+    /// Program exited normally
     Normal,
+    /// Setup complete, ready to execute functions
     Ready,
+    /// An invalid offset pointer was provided
     Ptr(RawOffsetPtr),
+    /// Allocation failed
     AllocatorFailed,
+    /// The provided layout table was too small
     InvalidMemoryLayoutTableTooSmall,
+    /// The pointer to the layout table was misaligned
     InvalidMemoryLayoutTableMisaligned,
+    /// The provided layout table is invalid
     InvalidMemoryLayout,
     /// An additional frame was needed for the mapping process, but the frame allocator
     /// returned `None`.
@@ -48,6 +56,42 @@ impl ExitCode {
         }
     }
 }
+
+#[cfg(feature = "vmi-consume")]
+impl Display for ExitCode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ExitCode::Normal => write!(f, "Normal Exit"),
+            ExitCode::Ready => write!(f, "Ready"),
+            ExitCode::Ptr(ptr) => write!(f, "Invalid offset pointer {}", ptr),
+            ExitCode::AllocatorFailed => write!(f, "Allocation failed"),
+            ExitCode::InvalidMemoryLayoutTableTooSmall => {
+                write!(f, "The provided layout table was too small")
+            }
+            ExitCode::InvalidMemoryLayoutTableMisaligned => {
+                write!(f, "The pointer to the layout table was misaligned")
+            }
+            ExitCode::InvalidMemoryLayout => write!(f, "The provided layout table is invalid"),
+            ExitCode::FrameAllocationFailed => write!(
+                f,
+                "An additional frame was needed for the mapping process, but the frame allocator returned `None`."
+            ),
+            ExitCode::ParentEntryHugePage => write!(
+                f,
+                "Page already part of a huge page due to set flag in parent"
+            ),
+            ExitCode::PageAlreadyMapped => write!(f, "Page already mapped"),
+            ExitCode::UnknownUpcall(sig) => {
+                write!(f, "Tried to call unknown function with signature: {}", sig)
+            }
+            ExitCode::ZeroCapacity => write!(f, "Buffer capacity is ZERO"),
+            ExitCode::Unmapped(code) => write!(f, "Unmapped exit code: {}", code),
+        }
+    }
+}
+
+#[cfg(feature = "vmi-consume")]
+impl core::error::Error for ExitCode {}
 
 #[cfg(feature = "vmi-consume")]
 impl ExitCode {

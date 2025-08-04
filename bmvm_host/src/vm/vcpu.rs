@@ -94,17 +94,35 @@ impl Vcpu {
         })
     }
 
-    pub fn get_regs(&mut self) -> Result<&kvm_regs> {
+    pub fn mutate_regs<M>(&mut self, m: M) -> Result<()>
+    where
+        M: FnOnce(&mut kvm_regs) -> bool,
+    {
+        self.refresh_regs()?;
+        self.regs.mutate(m);
+        Ok(())
+    }
+
+    pub fn set_regs(&mut self, regs: kvm_regs) {
+        self.regs.set(regs)
+    }
+
+    pub fn get_regs(&mut self) -> Result<kvm_regs> {
+        self.refresh_regs()?;
+        Ok(self.regs.get().clone())
+    }
+
+    pub fn read_regs(&mut self) -> Result<&kvm_regs> {
         self.refresh_regs()?;
         Ok(self.regs.get())
     }
 
-    pub fn get_sregs(&mut self) -> Result<&kvm_sregs> {
+    pub fn read_sregs(&mut self) -> Result<&kvm_sregs> {
         self.refresh_regs()?;
         Ok(self.sregs.get())
     }
 
-    pub fn get_all_regs(&mut self) -> Result<(&kvm_regs, &kvm_sregs)> {
+    pub fn read_all_regs(&mut self) -> Result<(&kvm_regs, &kvm_sregs)> {
         self.refresh_regs()?;
         Ok((self.regs.get(), self.sregs.get()))
     }

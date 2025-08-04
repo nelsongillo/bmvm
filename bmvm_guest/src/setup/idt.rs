@@ -11,7 +11,7 @@ pub(crate) fn setup(sys: &LayoutTableEntry, offset: u64) -> Result<(), ExitCode>
     Ok(())
 }
 
-fn handler_upcall_irq(stack_frame: InterruptStackFrame, index: u8, error_code: Option<u64>) {
+fn handler_upcall_irq(_stack_frame: InterruptStackFrame, _index: u8, _error_code: Option<u64>) {
     // todo!("handle irq {}", index)
 
     // let upcall_sig: u64;

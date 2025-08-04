@@ -1,9 +1,9 @@
-use crate::common::{MOTHER_CRATE, construct_idents, create_fn_call, extract_params, suffix};
-use crate::common::{find_crate, get_link_name};
-use crate::guest::{
-    CallDirection, ParamType, VAR_NAME_PARAM, VAR_NAME_TRANSPORT, gen_call_meta_debug,
-    gen_callmeta, process_params,
+use crate::common::{
+    CallDirection, MOTHER_CRATE, VAR_NAME_TRANSPORT, construct_idents, create_fn_call,
+    extract_params, gen_callmeta, process_params, suffix,
 };
+use crate::common::{find_crate, get_link_name};
+use crate::guest::{ParamType, VAR_NAME_PARAM, gen_call_meta_debug, make_type_turbofish};
 use bmvm_common::BMVM_META_SECTION_HOST;
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span, TokenStream as TS};
@@ -52,7 +52,7 @@ pub fn host_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
             let (fn_call, params, return_type) = fn_call.unwrap();
 
             // generate call meta static data
-            let (callmeta, fn_sig) = match gen_callmeta(
+            let callmeta = match gen_callmeta(
                 fn_call,
                 params,
                 return_type,
@@ -71,7 +71,7 @@ pub fn host_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 &mother,
                 &transport_struct,
                 &params,
-                CallDirection::Guest2Host,
+                Some(CallDirection::Guest2Host),
             ) {
                 Ok(x) => x,
                 Err(e) => return e.to_compile_error().into(),
@@ -88,20 +88,31 @@ pub fn host_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
             // function construction
             let fn_vis = &func.vis;
             let fn_params = &func.sig.inputs;
-            let (fn_return, union_return) = match &func.sig.output {
-                syn::ReturnType::Default => (quote! {()}, true),
-                syn::ReturnType::Type(_, ty) => (quote! {#ty}, false),
+            let (fn_return, turbofish_return_type, union_return) = match &func.sig.output {
+                syn::ReturnType::Default => (quote! {()}, quote! {()}, true),
+                syn::ReturnType::Type(_, ty) => {
+                    (quote! {#ty}, make_type_turbofish(&*ty.clone()), false)
+                }
             };
             let transport = gen_transport(&mother, &param_type);
-            let body = gen_body(&mother, &fn_return, &fn_sig, transport, union_return).unwrap();
+            let body = gen_body(
+                &mother,
+                &turbofish_return_type,
+                &callmeta.sig,
+                transport,
+                union_return,
+            )
+            .unwrap();
             let where_clause = if let ParamType::Value { ensure_trait, .. } = &param_type {
                 quote! {where #ensure_trait}
             } else {
                 quote! {}
             };
+            // TokenStream containing the static defs for FnCall etc
+            let meta = callmeta.token;
 
             Some(quote! {
-                #callmeta
+                #meta
                 #def_transport_struct
 
                 #fn_vis fn #fn_name(#fn_params) -> #fn_return

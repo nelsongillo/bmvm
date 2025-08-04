@@ -26,12 +26,6 @@ pub const NON_PAGING_PAGE_REQ: u64 = GDT_PAGE_REQ + IDT_PAGE_REQ;
 /// Bytes offset the paging structure by in the sys memory region
 pub const NON_PAGING_SPACE_REQ: u64 = GDT_SPACE_REQ + IDT_SPACE_REQ;
 
-static mut COUNTER: u8 = u8::MIN;
-unsafe fn counter() -> u8 {
-    COUNTER = COUNTER.wrapping_add(1);
-    COUNTER
-}
-
 // Define the I/O port to write to (example: 0x3F8 for COM1)
 pub(crate) const IO_PORT: u16 = 0x3f8;
 
@@ -42,15 +36,6 @@ pub(crate) fn write(port: u16, value: u8) {
         "out dx, al",
         in("dx") port,
         in("al") value,
-        );
-    }
-}
-
-pub(crate) fn push(v: i32) {
-    unsafe {
-        asm!(
-        "push {v}",
-        v = in(reg) v,
         );
     }
 }
@@ -66,7 +51,7 @@ pub fn setup() -> Result<(), ExitCode> {
     })?;
 
     // stage 1 -> Layout parsed
-    write(IO_PORT, unsafe { counter() });
+    write(IO_PORT, 0);
 
     let region_sys = table
         .into_iter()
@@ -74,25 +59,25 @@ pub fn setup() -> Result<(), ExitCode> {
         .ok_or(ExitCode::InvalidMemoryLayout)?;
 
     // stage 2 -> Layout parsed
-    write(IO_PORT, unsafe { counter() });
+    write(IO_PORT, 1);
 
     // set up the Interrupt Table
     idt::setup(&region_sys, 0)?;
 
     // stage 3 -> IDT done
-    write(IO_PORT, unsafe { counter() });
+    write(IO_PORT, 2);
 
     // set up the Global Descriptor Table
     gdt::setup(&region_sys, IDT_SPACE_REQ)?;
 
     // stage 4 -> GDT done
-    write(IO_PORT, unsafe { counter() });
+    write(IO_PORT, 3);
 
     // set up the paging structure
     paging::setup(table, region_sys)?;
 
     // stage 5 -> Paging Done
-    write(IO_PORT, unsafe { counter() });
+    write(IO_PORT, 4);
 
     Ok(())
 }

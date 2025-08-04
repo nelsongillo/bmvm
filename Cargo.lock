@@ -279,11 +279,19 @@ name = "host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bmvm-common",
  "bmvm-host",
  "clap",
  "env_logger",
+ "inventory",
  "log",
+]
+
+[[package]]
+name = "host-expand"
+version = "0.1.0"
+dependencies = [
+ "bmvm-host",
+ "inventory",
 ]
 
 [[package]]

@@ -1,6 +1,9 @@
-use crate::common::{MOTHER_CRATE, construct_idents, create_fn_call, extract_params};
+use crate::common::{
+    CallDirection, MOTHER_CRATE, construct_idents, create_fn_call, extract_params, gen_callmeta,
+    process_params,
+};
 use crate::common::{find_crate, suffix};
-use crate::guest::{CallDirection, ParamType, gen_call_meta_debug, gen_callmeta, process_params};
+use crate::guest::{ParamType, gen_call_meta_debug};
 use bmvm_common::{BMVM_META_SECTION_EXPOSE, BMVM_META_SECTION_EXPOSE_CALLS};
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TS};
@@ -40,7 +43,7 @@ pub fn expose_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let upcall_sig = fn_call.signature();
 
     // generate call meta static data
-    let (meta, _fn_sig) = match gen_callmeta(
+    let callmeta = match gen_callmeta(
         fn_call,
         params,
         return_type,
@@ -50,7 +53,6 @@ pub fn expose_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
         Ok(x) => x,
         Err(e) => return e.to_compile_error().into(),
     };
-    let debug = gen_call_meta_debug();
 
     // build struct fields and unpacking logic
     let params = extract_params(&input_fn.sig);
@@ -58,7 +60,7 @@ pub fn expose_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
         &mother,
         &transport_struct_name,
         &params,
-        CallDirection::Host2Guest,
+        Some(CallDirection::Host2Guest),
     ) {
         Ok(x) => x,
         Err(e) => return e.to_compile_error().into(),
@@ -76,8 +78,12 @@ pub fn expose_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // function wrapper generation
     let wrapper = gen_wrapper(&mother, fn_name, &wrapper_fn_name, &param_type);
-
+    // section name for sorting upcalls via the linker
     let sort_section_name = format!("{}.{:016x}", BMVM_META_SECTION_EXPOSE_CALLS, upcall_sig);
+    // optionally indicate debug information in the metadata
+    let debug = gen_call_meta_debug();
+    // TokenStream containing static defs for FnCall etc
+    let meta = callmeta.meta;
 
     // Generate the final token stream
     quote! {
@@ -101,6 +107,7 @@ pub fn expose_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// Generates the upcall wrapper, which will be called by the Upcall-Handler
 fn gen_wrapper(mother: &Ident, fn_name: &Ident, fn_name_wrapper: &Ident, params: &ParamType) -> TS {
     let ty_transport = quote! {#mother::Transport};
+    let foreign = quote! {#mother::Foreign};
     let foreign_shareable = quote! {#mother::ForeignShareable};
     let owned_shareable = quote! {#mother::OwnedShareable};
     let exit_with_code = quote! {#mother::exit_with_code};
@@ -151,7 +158,7 @@ fn gen_wrapper(mother: &Ident, fn_name: &Ident, fn_name_wrapper: &Ident, params:
                     }
                     let input = #ty_transport::new(primary, secondary);
                     use #foreign_shareable;
-                    let foreign = match #ty::from_transport(input) {
+                    let foreign = match #foreign::<#ty>::from_transport(input) {
                         Ok(x) => x,
                         Err(e) => #exit_with_code(e)
                     };

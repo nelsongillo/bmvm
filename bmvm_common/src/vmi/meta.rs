@@ -2,21 +2,6 @@ use crate::vmi::Signature;
 use core::cmp::Ordering;
 use std::ffi::{CStr, CString, FromVecWithNulError, NulError};
 
-inventory::collect!(HostVmiFn);
-
-pub struct HostVmiFn {
-    pub usage: Usage,
-    pub call: FnCall,
-}
-
-#[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
-pub enum Usage {
-    /// The host provides an implementation for this function required by the guest
-    Impl,
-    /// The guest implements the function required by the host
-    Call,
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("provided buffer is too short: expected at least {expected} bytes, got {actual}")]
@@ -335,7 +320,7 @@ mod test {
         };
 
         let mut expect = Vec::new();
-        expect.extend(0x1234567890abcdefu64.to_ne_bytes());
+        expect.extend(0x1234567890abcdefu64.to_le_bytes());
         expect.extend(b"foo\0");
         expect.push(2);
         expect.extend(b"bar\0");
@@ -358,7 +343,7 @@ mod test {
         };
 
         let mut expect = Vec::new();
-        expect.extend(0x1234567890abcdefu64.to_ne_bytes());
+        expect.extend(0x1234567890abcdefu64.to_le_bytes());
         expect.extend(b"foo\0");
 
         assert_eq!(expect.as_slice(), meta.to_bytes().as_slice());
@@ -368,7 +353,7 @@ mod test {
     #[test]
     fn from_bytes_debug_no_params_no_ret() {
         let mut buf = Vec::new();
-        buf.extend(0x1234567890abcdefu64.to_ne_bytes());
+        buf.extend(0x1234567890abcdefu64.to_le_bytes());
         buf.extend(b"foo\0");
         buf.push(0);
         buf.push(0);
@@ -390,7 +375,7 @@ mod test {
     #[test]
     fn from_bytes_no_debug() {
         let mut buf = Vec::new();
-        buf.extend(0x1234567890abcdefu64.to_ne_bytes());
+        buf.extend(0x1234567890abcdefu64.to_le_bytes());
         buf.extend(b"foo\0");
 
         let expect = FnCall {
@@ -410,7 +395,7 @@ mod test {
     #[test]
     fn from_bytes_debug_2_params_and_return() {
         let mut buf = Vec::new();
-        buf.extend(0x1234567890abcdefu64.to_ne_bytes());
+        buf.extend(0x1234567890abcdefu64.to_le_bytes());
         buf.extend(b"foo\0");
         buf.push(2);
         buf.extend(b"bar\0");
@@ -434,7 +419,7 @@ mod test {
     #[test]
     fn from_bytes_zero_signature() {
         let mut buf = Vec::new();
-        buf.extend(0u64.to_ne_bytes());
+        buf.extend(0u64.to_le_bytes());
         buf.extend(b"foo\0");
         buf.push(0);
         buf.push(0);
@@ -478,7 +463,7 @@ mod test {
     #[test]
     fn from_bytes_too_few_params_debug() {
         let mut buf = Vec::new();
-        buf.extend(0x1234567890abcdefu64.to_ne_bytes());
+        buf.extend(0x1234567890abcdefu64.to_le_bytes());
         buf.extend(b"foo\0");
         buf.push(2);
         buf.extend(b"bar\0");
