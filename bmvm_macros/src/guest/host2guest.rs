@@ -1,6 +1,6 @@
 use crate::common::{
-    CallDirection, MOTHER_CRATE, construct_idents, create_fn_call, extract_params, gen_callmeta,
-    process_params,
+    CallDirection, MOTHER_CRATE, VAR_NAME_PARAM, VAR_NAME_RETURN, construct_idents, create_fn_call,
+    extract_params, gen_callmeta, process_params,
 };
 use crate::common::{find_crate, suffix};
 use crate::guest::{ParamType, gen_call_meta_debug};
@@ -9,8 +9,6 @@ use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TS};
 use quote::quote;
 use syn::{Ident, ItemFn, parse_macro_input};
-
-static PARAM_VAR_NAME: &'static str = "params";
 
 /// Procedural macro implementation:
 /// * Checks that all function parameters implement TypeSignature and return type implements OwnedShareable trait
@@ -111,60 +109,61 @@ fn gen_wrapper(mother: &Ident, fn_name: &Ident, fn_name_wrapper: &Ident, params:
     let foreign_shareable = quote! {#mother::ForeignShareable};
     let owned_shareable = quote! {#mother::OwnedShareable};
     let exit_with_code = quote! {#mother::exit_with_code};
-    let var_params = Ident::new(PARAM_VAR_NAME, Span::call_site());
+    let var_params = Ident::new(VAR_NAME_PARAM, Span::call_site());
+    let var_return = Ident::new(VAR_NAME_RETURN, Span::call_site());
 
     let func_call = match params {
         ParamType::Void => {
             quote! {
-                    let ret = #fn_name();
+                    let #var_return = #fn_name();
             }
         }
         ParamType::Value { ty_turbofish, .. } => {
             quote! {
-                    let primary: u64;
-                    let secondary: u64;
+                    let __primary: u64;
+                    let __secondary: u64;
                     unsafe {
                         // Read parameters from registers
                         core::arch::asm! (
                             "mov r8, {0}",
                             "mov r9, {1}",
-                            out(reg) primary,
-                            out(reg) secondary,
+                            out(reg) __primary,
+                            out(reg) __secondary,
                         );
                     }
-                    let input = #ty_transport::new(primary, secondary);
+                    let __input = #ty_transport::new(__primary, __secondary);
                     use #foreign_shareable;
-                    let param = match #ty_turbofish::from_transport(input) {
+                    let #var_params = match #ty_turbofish::from_transport(__input) {
                         Ok(x) => x,
                         Err(e) => #exit_with_code(e)
                     };
 
-                    let ret = #fn_name(param);
+                    let #var_return = #fn_name(#var_params);
             }
         }
         ParamType::MultipleValues { ty, packaging, .. } => {
             quote! {
-                    let primary: u64;
-                    let secondary: u64;
+                    let __primary: u64;
+                    let __secondary: u64;
 
                     unsafe {
                         // Read parameters from registers
                         core::arch::asm! (
                             "mov r8, {0}",
                             "mov r9, {1}",
-                            out(reg) primary,
-                            out(reg) secondary,
+                            out(reg) __primary,
+                            out(reg) __secondary,
                         );
                     }
-                    let input = #ty_transport::new(primary, secondary);
+                    let __input = #ty_transport::new(__primary, __secondary);
                     use #foreign_shareable;
-                    let foreign = match #foreign::<#ty>::from_transport(input) {
+                    let __foreign = match #foreign::<#ty>::from_transport(__input) {
                         Ok(x) => x,
                         Err(e) => #exit_with_code(e)
                     };
 
-                    let #var_params = foreign.get();
-                    let ret = #fn_name(#(#packaging),*);
+                    let (#(#packaging),*) = unsafe { __foreign.unpack() };
+                    let #var_return = #fn_name(#(#packaging),*);
             }
         }
     };
@@ -174,15 +173,15 @@ fn gen_wrapper(mother: &Ident, fn_name: &Ident, fn_name_wrapper: &Ident, params:
         pub extern "C" fn #fn_name_wrapper() {
             #func_call
             use #owned_shareable;
-            let output = ret.into_transport();
+            let __output = #var_return.into_transport();
             // Halt to indicate function exit and populate return registers
             unsafe {
                 core::arch::asm! (
                     "hlt",
                     "mov r8, {0}",
                     "mov r9, {1}",
-                    in(reg) output.primary,
-                    in(reg) output.secondary,
+                    in(reg) __output.primary,
+                    in(reg) __output.secondary,
                 );
             }
         }

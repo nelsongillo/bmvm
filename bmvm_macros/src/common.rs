@@ -20,8 +20,9 @@ pub type StructFields = Vec<TokenStream>;
 pub type WherePreds = Vec<WherePredicate>;
 pub type ParamPackaging = Vec<TokenStream>;
 
-pub static VAR_NAME_PARAM: &'static str = "params";
-pub static VAR_NAME_TRANSPORT: &'static str = "transport";
+pub static VAR_NAME_PARAM: &'static str = "__params";
+pub static VAR_NAME_TRANSPORT: &'static str = "__transport";
+pub static VAR_NAME_RETURN: &'static str = "__ret";
 
 pub const STATIC_META: &'static str = "BMVM_CALL_META_";
 pub const STATIC_META_TUPLE: &'static str = "BMVM_CALL_META_TUPLE_";
@@ -259,10 +260,14 @@ pub fn process_params(
     let mut where_preds: WherePreds = Vec::new();
     // statements to unpack the parameters from struct to function all
     let mut param_packaging: ParamPackaging = Vec::new();
+    let mut param_types: Vec<Type> = Vec::new();
+    let mut param_read = Vec::new();
+    let mut param_names: Vec<Ident> = Vec::new();
     let var_params = Ident::new(VAR_NAME_PARAM, Span::call_site());
+    let var_this = Ident::new("this", Span::call_site());
 
     // Process each parameter
-    for (name, ty) in params {
+    for (name, ty) in params.iter() {
         if let Some(_) = is_reference_type(ty) {
             return Err(Error::new(
                 Span::call_site(),
@@ -270,17 +275,36 @@ pub fn process_params(
             ));
         }
 
+        param_names.push(name.clone());
+        param_types.push(ty.clone());
         struct_fields.push(quote! { pub #name: #ty });
         where_preds.push(parse_quote!(#ty: #trait_signature));
         match call_direction {
-            Some(CallDirection::Host2Guest) => param_packaging.push(quote! { #var_params.#name }),
+            Some(CallDirection::Host2Guest) | None => {
+                param_read
+                    .push(quote! { let #name = unsafe { core::ptr::read(&(*#var_this).#name) }; });
+                param_packaging.push(quote! { #name });
+            }
             Some(CallDirection::Guest2Host) => {
                 param_packaging.push(quote! { #var_params.#name = #name; })
             }
-            // No direction specified, default to callee side packaging
-            None => param_packaging.push(quote! { #var_params.#name }),
         }
     }
+
+    let trait_transport_container = quote! {#mother::Unpackable};
+    let unpack = match call_direction {
+        Some(CallDirection::Host2Guest) | None => quote! {
+            unsafe impl #trait_transport_container for #transport_struct {
+                type Output = (#(#param_types,)*);
+                unsafe fn unpack(#var_this: *const Self) -> Self::Output {
+                    // Extract the fields we want to own
+                    #(#param_read)*
+                    return (#(#param_names,)*)
+                }
+            }
+        },
+        _ => quote! {},
+    };
 
     Ok(ParamType::MultipleValues {
         ty: transport_struct.clone(),
@@ -294,6 +318,8 @@ pub fn process_params(
             {
                 #(#struct_fields),*
             }
+
+            #unpack
         },
         packaging: param_packaging,
     })

@@ -1,6 +1,6 @@
 use crate::common::{
-    MOTHER_CRATE, ParamType, VAR_NAME_PARAM, construct_idents, create_fn_call, extract_params,
-    gen_callmeta, process_params,
+    MOTHER_CRATE, ParamType, VAR_NAME_PARAM, VAR_NAME_RETURN, construct_idents, create_fn_call,
+    extract_params, gen_callmeta, process_params,
 };
 use crate::common::{find_crate, suffix};
 use bmvm_common::BMVM_META_SECTION_EXPOSE;
@@ -104,37 +104,37 @@ fn gen_wrapper(mother: &Ident, fn_name: &Ident, fn_name_wrapper: &Ident, params:
     let owned_shareable = quote! {#mother::OwnedShareable};
     let var_params = Ident::new(VAR_NAME_PARAM, Span::call_site());
     let var_transport = Ident::new(VAR_NAME_TRANSPORT, Span::call_site());
+    let var_return = Ident::new(VAR_NAME_RETURN, Span::call_site());
 
     let func_call = match params {
         ParamType::Void => {
             quote! {
-                let ret = #fn_name();
+                let #var_return = #fn_name();
             }
         }
         ParamType::Value { ty_turbofish, .. } => {
             quote! {
                 use #foreign_shareable;
                 let #var_params = #ty_turbofish::from_transport(#var_transport)?;
-                let ret = #fn_name(#var_params);
+                let #var_return = #fn_name(#var_params);
             }
         }
         ParamType::MultipleValues { ty, packaging, .. } => {
-            // TODO: Fix moving Foreign<T> and ForeignBuf
             quote! {
                 use #foreign_shareable;
-                let foreign = #ty_foreign::<#ty>::from_transport(#var_transport)?;
-                let #var_params = foreign.get();
-                let ret = #fn_name(#(#packaging),*);
+                let __foreign = #ty_foreign::<#ty>::from_transport(#var_transport)?;
+                let (#(#packaging),*) = unsafe { __foreign.unpack() };
+                let #var_return = #fn_name(#(#packaging),*);
             }
         }
     };
 
     quote! {
         #[unsafe(no_mangle)]
-        pub extern "C" fn #fn_name_wrapper(#var_transport: #ty_transport) -> #ty_result {
+        pub fn #fn_name_wrapper(#var_transport: #ty_transport) -> #ty_result {
             #func_call
             use #owned_shareable;
-            Ok(ret.into_transport())
+            Ok(#var_return.into_transport())
         }
     }
 }

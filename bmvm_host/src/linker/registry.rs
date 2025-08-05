@@ -9,7 +9,7 @@ inventory::collect!(CallableFunction);
 
 pub type HypercallResult = Result<Transport, ExitCode>;
 
-pub type WrapperFunc = extern "C" fn(Transport) -> HypercallResult;
+pub type WrapperFunc = fn(Transport) -> HypercallResult;
 
 pub struct CallableFunction {
     /// serialized FnCall

@@ -16,7 +16,7 @@ pub use bmvm_common::error::ExitCode;
 pub use bmvm_common::hash::Djb2;
 pub use bmvm_common::mem::{
     Foreign, ForeignBuf, ForeignShareable, OffsetPtr, Owned, OwnedBuf, OwnedShareable,
-    RawOffsetPtr, Shared, SharedBuf, Transport, alloc, alloc_buf, dealloc, dealloc_buf,
+    RawOffsetPtr, Shared, SharedBuf, Transport, Unpackable, alloc, alloc_buf, dealloc, dealloc_buf,
     get_foreign,
 };
 pub use bmvm_common::vmi::{Signature, UpcallFn};

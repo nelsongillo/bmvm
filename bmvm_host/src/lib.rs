@@ -15,7 +15,7 @@ use std::sync::OnceLock;
 pub use bmvm_common::hash::Djb2;
 pub use bmvm_common::mem::{
     Foreign, ForeignBuf, ForeignShareable, Owned, OwnedBuf, OwnedShareable, Shared, SharedBuf,
-    Transport,
+    Transport, Unpackable,
 };
 pub use bmvm_common::mem::{PhysAddr, align_ceil, alloc, alloc_buf, get_foreign};
 pub use bmvm_common::registry;

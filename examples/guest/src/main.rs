@@ -21,8 +21,10 @@ unsafe extern "C" {
 }
 
 #[expose]
-fn foo(a: u32, b: char) -> SharedBuf {
-    let buf = unsafe { alloc_buf(16) }.ok().unwrap();
+fn foo(a: u32, b: Foreign<Foo>) -> SharedBuf {
+    let mut buf = unsafe { alloc_buf(16) }.ok().unwrap();
+    let b = buf.as_mut();
+    b.copy_from_slice(&a.to_le_bytes());
     buf.into_shared()
 }
 

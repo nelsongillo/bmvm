@@ -2,7 +2,7 @@ use crate::error::ExitCode;
 use crate::mem::{AlignedNonZeroUsize, VirtAddr};
 use crate::typesignature::TypeSignature;
 use core::alloc::{Allocator, Layout};
-use core::fmt::{Binary, Display, Formatter};
+use core::mem::ManuallyDrop;
 use core::num::NonZeroUsize;
 use core::ptr::NonNull;
 use spin::once::Once;
@@ -98,8 +98,13 @@ impl<M: lock_api::RawMutex, O: talc::OomHandler> AllocImpl<M, O> {
 
     fn get<T: TypeSignature>(&self, ptr: &OffsetPtr<T>) -> &T {
         let addr = self.base + ptr.offset as u64;
-        let ptr = addr.as_ptr::<T>().cast_mut();
-        unsafe { ptr.as_ref().unwrap() }
+        let value_ptr: *const T = addr.as_ptr::<T>().cast();
+        unsafe { value_ptr.as_ref().unwrap() }
+    }
+
+    fn get_ptr<T: Unpackable>(&self, ptr: &OffsetPtr<T>) -> *const T {
+        let addr = self.base + ptr.offset as u64;
+        addr.as_ptr::<T>().cast()
     }
 
     /// Transform a Foreign<T> to a NonNull<T>
@@ -199,8 +204,8 @@ pub struct RawOffsetPtr {
 }
 
 #[cfg(feature = "vmi-consume")]
-impl Display for RawOffsetPtr {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+impl core::fmt::Display for RawOffsetPtr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}", self.inner)
     }
 }
@@ -392,7 +397,39 @@ pub struct Foreign<T: TypeSignature> {
 impl<T: TypeSignature> Foreign<T> {
     /// Get the underlying value of the pointer.
     pub fn get(&self) -> &T {
-        ALLOC_FOREIGN.get().unwrap().get(&self.ptr)
+        let alloc = ALLOC_FOREIGN.get().unwrap();
+        alloc.get(&self.ptr)
+    }
+}
+
+impl<T: Unpackable> Foreign<T> {
+    pub fn get_ptr(&self) -> *const T {
+        let alloc = ALLOC_FOREIGN.get().unwrap();
+        let ptr = alloc.get_ptr(&self.ptr);
+        ptr
+    }
+
+    pub unsafe fn unpack(self) -> T::Output {
+        // ManuallyDrop to prevent automatic dropping
+        let this = ManuallyDrop::new(self);
+        // get the raw pointer to the underlying value
+        let ptr = this.get_ptr();
+        // unpack the fields from the struct (copies the values)
+        let output = unsafe { T::unpack(ptr) };
+        // due to the copy of the underlying struct fields, the original value can be deallocated
+        // without dropping (prevents double drop)
+        this.manually_dealloc();
+
+        output
+    }
+
+    /// This function triggers a deallocation without drop of the underlying pointer.
+    /// SAFETY: using the value after this function call triggers undefined behaviour.
+    pub fn manually_dealloc(&self) {
+        // unwrap is safe because the allocator is needed to even construct the foreign pointer
+        let alloc = ALLOC_FOREIGN.get().unwrap();
+        let ptr = alloc.get_non_null(self);
+        alloc.dealloc(ptr);
     }
 }
 
@@ -424,7 +461,7 @@ impl<T: TypeSignature> Drop for Foreign<T> {
     fn drop(&mut self) {
         // unwrap is safe because the allocator is needed to even construct the foreign pointer
         let alloc = ALLOC_FOREIGN.get().unwrap();
-        let ptr = alloc.get_non_null(self);
+        let ptr = alloc.get_non_null(&self);
         alloc.dealloc(ptr);
     }
 }
@@ -510,8 +547,8 @@ pub struct Transport {
 }
 
 #[cfg(feature = "vmi-consume")]
-impl Display for Transport {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+impl core::fmt::Display for Transport {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{:?}", self)
     }
 }
@@ -600,4 +637,12 @@ impl ForeignShareable for char {
     fn from_transport(t: Transport) -> Result<Self, ExitCode> {
         Ok(t.primary as u8 as char)
     }
+}
+
+/// This marks a type as being only there for the VMI parameter/return type transport, and should
+/// NEVER be implemented manually.
+pub unsafe trait Unpackable: TypeSignature {
+    type Output;
+    /// unpack copies the struct values via ptr::read
+    unsafe fn unpack(this: *const Self) -> Self::Output;
 }

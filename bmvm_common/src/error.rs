@@ -1,6 +1,5 @@
 use crate::mem::RawOffsetPtr;
 use crate::vmi::Signature;
-use core::fmt::{Display, Formatter};
 use x86_64::structures::paging::PageSize;
 use x86_64::structures::paging::mapper::MapToError;
 
@@ -58,8 +57,8 @@ impl ExitCode {
 }
 
 #[cfg(feature = "vmi-consume")]
-impl Display for ExitCode {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+impl core::fmt::Display for ExitCode {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             ExitCode::Normal => write!(f, "Normal Exit"),
             ExitCode::Ready => write!(f, "Ready"),

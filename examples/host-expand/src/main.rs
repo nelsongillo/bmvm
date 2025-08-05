@@ -9,7 +9,7 @@ struct Foo {
 
 #[expose]
 fn e(a: u32, b: char, c: Foreign<Foo>) -> Shared<Foo> {
-    let mut f = unsafe { alloc::<Foo>() }.ok().unwrap();
+    let f = unsafe { alloc::<Foo>() }.ok().unwrap();
     f.into_shared()
 }
 
