@@ -331,8 +331,8 @@ pub fn gen_callmeta(
 
     // construct fully qualified name for Djb2 and TypeSignature for use in the macro output
     let crate_bmvm = find_crate(MOTHER_CRATE)?;
-    let type_djb2 = quote! {#crate_bmvm::Djb2};
-    let type_typehash = quote! {#crate_bmvm::TypeSignature};
+    let ty_hash = quote! {#crate_bmvm::Djb2};
+    let ty_typesignature = quote! {#crate_bmvm::TypeSignature};
 
     // Convert each string to a syn::Type and quote the hashing line
     let mut hash_lines = params
@@ -341,12 +341,12 @@ pub fn gen_callmeta(
         .map(|(idx, ty)| {
             quote! {
                 hasher.write(&(#idx as u64).to_le_bytes());
-                hasher.write(&<#ty as #type_typehash>::SIGNATURE.to_le_bytes());
+                hasher.write(&<#ty as #ty_typesignature>::SIGNATURE.to_le_bytes());
             }
         })
         .collect::<Vec<_>>();
     hash_lines.push(quote! {
-        hasher.write(&<#return_type as #type_typehash>::SIGNATURE.to_le_bytes());
+        hasher.write(&<#return_type as #ty_typesignature>::SIGNATURE.to_le_bytes());
     });
 
     // The FnCall signature is stored in the first 8 bytes of the FnCall data. At the moment it is
@@ -359,7 +359,7 @@ pub fn gen_callmeta(
     let token = quote! {
         #[used]
         static #meta_name_tuple: ([u8; #meta_size], u64) = {
-            let mut hasher = #type_djb2::from_partial(#sig_seed);
+            let mut hasher = #ty_hash::from_partial(#sig_seed);
             #(#hash_lines)*
             let sig = hasher.finish();
             let sig_bytes = sig.to_ne_bytes();

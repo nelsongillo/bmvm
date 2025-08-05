@@ -83,7 +83,7 @@ pub fn expose_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // optionally indicate debug information in the metadata
     let debug = gen_call_meta_debug();
     // TokenStream containing static defs for FnCall etc
-    let meta = callmeta.meta;
+    let meta = callmeta.token;
 
     // Generate the final token stream
     quote! {
