@@ -10,7 +10,7 @@ macro_rules! impl_type_hash_for_primitive {
         $(
             impl TypeSignature for $prim {
                 const SIGNATURE: u64 = {
-                    let mut h = crate::hash::Djb2::new();
+                    let mut h = crate::hash::SignatureHasher::new();
                     h.write(0u64.to_le_bytes().as_slice());
                     h.write($str.as_bytes());
                     h.finish()
@@ -23,7 +23,7 @@ macro_rules! impl_type_hash_for_primitive {
 
 impl TypeSignature for NonZeroUsize {
     const SIGNATURE: u64 = {
-        let mut h = crate::hash::Djb2::new();
+        let mut h = crate::hash::SignatureHasher::new();
         h.write(0u64.to_le_bytes().as_slice());
         h.write(usize::SIGNATURE.to_le_bytes().as_slice());
         h.finish()

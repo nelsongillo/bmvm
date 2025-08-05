@@ -1,4 +1,4 @@
-use crate::linker::Function;
+use crate::linker::hypercall::Function;
 use bmvm_common::error::ExitCode;
 use bmvm_common::mem::Transport;
 use bmvm_common::vmi::Signature;

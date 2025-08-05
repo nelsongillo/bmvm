@@ -72,10 +72,10 @@ impl<M: lock_api::RawMutex, O: talc::OomHandler> AllocImpl<M, O> {
         unsafe { self.talck.deallocate(ptr.cast::<u8>(), layout) }
     }
 
-    fn dealloc_buf(&self, buf: OwnedBuf) {
+    fn dealloc_buf(&self, ptr: NonNull<u8>, capacity: NonZeroUsize) {
         let align = align_of::<u8>();
-        let layout = Layout::from_size_align(buf.capacity.get(), align).unwrap();
-        unsafe { self.talck.deallocate(buf.ptr, layout) }
+        let layout = Layout::from_size_align(capacity.get(), align).unwrap();
+        unsafe { self.talck.deallocate(ptr, layout) }
     }
 
     /// Check the offset pointer for validity (fits in the arena) and return a readable reference
@@ -108,8 +108,8 @@ impl<M: lock_api::RawMutex, O: talc::OomHandler> AllocImpl<M, O> {
     }
 
     /// Transform a Foreign<T> to a NonNull<T>
-    fn get_non_null<T: TypeSignature>(&self, foreign: &Foreign<T>) -> NonNull<T> {
-        let addr = self.base + foreign.ptr.offset as u64;
+    fn get_non_null<T: TypeSignature>(&self, offset_ptr: &OffsetPtr<T>) -> NonNull<T> {
+        let addr = self.base + offset_ptr.offset as u64;
         let ptr = addr.as_ptr::<T>().cast_mut();
         // SAFETY: can be unchecked, as Foreign<T> was constructed by this allocator and null ptr
         // check was done on construction
@@ -185,7 +185,7 @@ pub fn dealloc<T: TypeSignature>(ptr: NonNull<T>) {
 /// peer will not use the memory anymore.
 pub fn dealloc_buf(buf: OwnedBuf) {
     match ALLOC_OWN.get() {
-        Some(alloc) => alloc.dealloc_buf(buf),
+        Some(alloc) => alloc.dealloc_buf(buf.ptr, buf.capacity),
         None => return,
     }
 }
@@ -245,7 +245,7 @@ impl<T: TypeSignature> From<RawOffsetPtr> for OffsetPtr<T> {
 
 impl<T: TypeSignature> TypeSignature for OffsetPtr<T> {
     const SIGNATURE: u64 = {
-        let mut h = crate::hash::Djb2::new();
+        let mut h = crate::hash::SignatureHasher::new();
         h.write(0u64.to_le_bytes().as_slice());
         h.write(b"OffsetPtr");
         h.write(<T as TypeSignature>::SIGNATURE.to_le_bytes().as_slice());
@@ -255,6 +255,7 @@ impl<T: TypeSignature> TypeSignature for OffsetPtr<T> {
 }
 
 /// Owned allocation for future sharing with the VMI peer.
+#[repr(transparent)]
 pub struct Owned<T: TypeSignature> {
     inner: NonNull<T>,
 }
@@ -296,7 +297,7 @@ impl<T: TypeSignature> From<Owned<T>> for Shared<T> {
 
 impl<T: TypeSignature> TypeSignature for Shared<T> {
     const SIGNATURE: u64 = {
-        let mut h = crate::hash::Djb2::new();
+        let mut h = crate::hash::SignatureHasher::new();
         h.write(0u64.to_le_bytes().as_slice());
         h.write(b"Shared");
         h.write(<T as TypeSignature>::SIGNATURE.to_le_bytes().as_slice());
@@ -318,6 +319,7 @@ impl<T: TypeSignature> OwnedShareable for Shared<T> {
 /// Owned buffer allocated for future sharing with the VMI peer.
 /// VMI messages attributes should use `SharedBuf` instead of `OwnedBuf` to hint on a
 /// type-level that the receiving peer should not mutate the underlying data.
+#[repr(C)]
 pub struct OwnedBuf {
     ptr: NonNull<u8>,
     capacity: NonZeroUsize,
@@ -352,14 +354,27 @@ impl AsMut<[u8]> for OwnedBuf {
 }
 
 /// Shared buffer allocated for sharing with the VMI peer.
+#[repr(C)]
 pub struct SharedBuf {
     ptr: OffsetPtr<u8>,
     capacity: NonZeroUsize,
 }
 
+impl SharedBuf {
+    /// This function deallocates the buffer.
+    /// SAFETY: using the value after this function call triggers undefined behavior! This extends
+    /// to usage by the VMI peer!
+    pub fn deallocate(self) {
+        // unwrap is safe because the allocator is needed to even construct the foreign pointer
+        let alloc = ALLOC_OWN.get().unwrap();
+        let ptr = alloc.get_non_null(&self.ptr);
+        alloc.dealloc_buf(ptr, self.capacity);
+    }
+}
+
 impl TypeSignature for SharedBuf {
     const SIGNATURE: u64 = {
-        let mut h = crate::hash::Djb2::new();
+        let mut h = crate::hash::SignatureHasher::new();
         h.write(0u64.to_le_bytes().as_slice());
         h.write(b"SharedBuf");
         h.write(
@@ -390,6 +405,7 @@ impl OwnedShareable for SharedBuf {
 
 /// Foreign memory allocated by the VMI peer.
 /// This wraps a raw pointer and manages deallocation on drop.
+#[repr(transparent)]
 pub struct Foreign<T: TypeSignature> {
     ptr: OffsetPtr<T>,
 }
@@ -428,14 +444,14 @@ impl<T: Unpackable> Foreign<T> {
     pub fn manually_dealloc(&self) {
         // unwrap is safe because the allocator is needed to even construct the foreign pointer
         let alloc = ALLOC_FOREIGN.get().unwrap();
-        let ptr = alloc.get_non_null(self);
+        let ptr = alloc.get_non_null(&self.ptr);
         alloc.dealloc(ptr);
     }
 }
 
 impl<T: TypeSignature> TypeSignature for Foreign<T> {
     const SIGNATURE: u64 = {
-        let mut h = crate::hash::Djb2::new();
+        let mut h = crate::hash::SignatureHasher::new();
         h.write(0u64.to_le_bytes().as_slice());
         h.write(b"Foreign");
         h.write(
@@ -450,7 +466,7 @@ impl<T: TypeSignature> TypeSignature for Foreign<T> {
 
 impl<T: TypeSignature> TypeSignature for &Foreign<T> {
     const SIGNATURE: u64 = {
-        let mut h = crate::hash::Djb2::from_partial(Foreign::<T>::SIGNATURE);
+        let mut h = crate::hash::SignatureHasher::from_partial(Foreign::<T>::SIGNATURE);
         h.write(b"&Foreign");
         h.finish()
     };
@@ -461,7 +477,7 @@ impl<T: TypeSignature> Drop for Foreign<T> {
     fn drop(&mut self) {
         // unwrap is safe because the allocator is needed to even construct the foreign pointer
         let alloc = ALLOC_FOREIGN.get().unwrap();
-        let ptr = alloc.get_non_null(&self);
+        let ptr = alloc.get_non_null(&self.ptr);
         alloc.dealloc(ptr);
     }
 }
@@ -484,14 +500,14 @@ pub struct ForeignBuf {
 impl AsRef<[u8]> for ForeignBuf {
     fn as_ref(&self) -> &[u8] {
         let alloc = ALLOC_FOREIGN.get().unwrap();
-        let ptr = alloc.get_non_null(&self.ptr);
+        let ptr = alloc.get_non_null(&self.ptr.ptr);
         unsafe { core::slice::from_raw_parts(ptr.as_ptr(), self.capacity.get()) }
     }
 }
 
 impl TypeSignature for ForeignBuf {
     const SIGNATURE: u64 = {
-        let mut h = crate::hash::Djb2::new();
+        let mut h = crate::hash::SignatureHasher::new();
         h.write(0u64.to_le_bytes().as_slice());
         h.write(b"ForeignBuf");
         h.write(
@@ -512,7 +528,7 @@ impl TypeSignature for ForeignBuf {
 
 impl TypeSignature for &ForeignBuf {
     const SIGNATURE: u64 = {
-        let mut h = crate::hash::Djb2::from_partial(ForeignBuf::SIGNATURE);
+        let mut h = crate::hash::SignatureHasher::from_partial(ForeignBuf::SIGNATURE);
         h.write(b"&ForeignBuf");
         h.finish()
     };
@@ -560,12 +576,12 @@ impl Transport {
 }
 
 #[sealed::sealed]
-pub trait OwnedShareable {
+pub trait OwnedShareable: TypeSignature {
     fn into_transport(self) -> Transport;
 }
 
 #[sealed::sealed]
-pub trait ForeignShareable {
+pub trait ForeignShareable: TypeSignature {
     fn from_transport(t: Transport) -> Result<Self, ExitCode>
     where
         Self: Sized;

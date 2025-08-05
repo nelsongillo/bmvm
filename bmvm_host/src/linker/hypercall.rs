@@ -1,7 +1,7 @@
 use bmvm_common::error::ExitCode;
 use bmvm_common::mem::Transport;
+use bmvm_common::vmi;
 use bmvm_common::vmi::{FnCall, Signature};
-use bmvm_common::{TypeSignature, vmi};
 use std::cmp::Ordering;
 use std::ffi::IntoStringError;
 
@@ -82,43 +82,3 @@ impl Ord for Function {
         self.name.cmp(&other.name)
     }
 }
-
-/// This trait is used to enforce the rule that functions intended for cross-boundary calls must
-/// have parameters which are either primitives implementing the `Type` trait or passable messages.
-/// To be able to be a passable message, the type must
-/// * Sized
-/// * be `repr(C)` or `repr(transparent)` (where the single field must implement `Msg`)
-pub trait Params: Sized {}
-
-macro_rules! for_each_signature {
-    ($mac:ident) => {
-        $mac!();
-        $mac!(T1);
-        $mac!(T1 T2);
-        $mac!(T1 T2 T3);
-        $mac!(T1 T2 T3 T4);
-        $mac!(T1 T2 T3 T4 T5);
-        $mac!(T1 T2 T3 T4 T5 T6);
-        $mac!(T1 T2 T3 T4 T5 T6 T7);
-        $mac!(T1 T2 T3 T4 T5 T6 T7 T8);
-        $mac!(T1 T2 T3 T4 T5 T6 T7 T8 T9);
-        $mac!(T1 T2 T3 T4 T5 T6 T7 T8 T9 T10);
-        $mac!(T1 T2 T3 T4 T5 T6 T7 T8 T9 T10 T11);
-        $mac!(T1 T2 T3 T4 T5 T6 T7 T8 T9 T10 T11 T12);
-        $mac!(T1 T2 T3 T4 T5 T6 T7 T8 T9 T10 T11 T12 T13);
-        $mac!(T1 T2 T3 T4 T5 T6 T7 T8 T9 T10 T11 T12 T13 T14);
-        $mac!(T1 T2 T3 T4 T5 T6 T7 T8 T9 T10 T11 T12 T13 T14 T15);
-        $mac!(T1 T2 T3 T4 T5 T6 T7 T8 T9 T10 T11 T12 T13 T14 T15 T16);
-        $mac!(T1 T2 T3 T4 T5 T6 T7 T8 T9 T10 T11 T12 T13 T14 T15 T16 T17);
-    };
-}
-
-macro_rules! impl_params {
-    ($($t:ident)*) => (
-        #[allow(unused_parens)]
-        impl<$($t),*> Params for ($($t,)*)  where
-            $($t: TypeSignature,)* {}
-    );
-}
-
-for_each_signature!(impl_params);

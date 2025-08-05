@@ -17,7 +17,7 @@ struct Bar {
 
 #[host]
 unsafe extern "C" {
-    fn x(a: Foreign<Foo>, b: i32) -> Foreign<Bar>;
+    fn x(a: Foo, b: i32) -> Foreign<Bar>;
 }
 
 #[expose]

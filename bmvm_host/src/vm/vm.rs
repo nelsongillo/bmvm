@@ -1,22 +1,23 @@
 use crate::alloc::{Allocator, ReadWrite, Region, RegionCollection};
 use crate::elf::ExecBundle;
-use crate::linker::HypercallResult;
 use crate::vm::registry::FunctionRegistry;
 use crate::vm::vcpu::Vcpu;
 use crate::vm::{Config, registry, setup, vcpu};
 use crate::{GUEST_STACK_ADDR, GUEST_SYSTEM_ADDR, GUEST_TMP_SYSTEM_SIZE};
-use bmvm_common::HYPERCALL_IO_PORT;
 use bmvm_common::error::ExitCode;
+use bmvm_common::hash::SignatureHasher;
 use bmvm_common::mem::{
-    Align, AlignedNonZeroUsize, DefaultAddrSpace, DefaultAlign, Flags, LayoutTableEntry, PhysAddr,
-    Transport, VirtAddr, align_floor, virt_to_phys,
+    Align, AlignedNonZeroUsize, DefaultAddrSpace, DefaultAlign, Flags, ForeignShareable,
+    LayoutTableEntry, PhysAddr, Transport, VirtAddr, align_floor, virt_to_phys,
 };
+use bmvm_common::registry::Params;
 use bmvm_common::{
     BMVM_MEM_LAYOUT_TABLE, BMVM_TMP_GDT, BMVM_TMP_IDT, BMVM_TMP_PAGING, BMVM_TMP_SYS,
     region_abs_offset,
 };
+use bmvm_common::{HYPERCALL_IO_PORT, TypeSignature};
 use kvm_bindings::KVM_API_VERSION;
-use kvm_ioctls::{Cap, HypercallExit, Kvm, VcpuExit, VmFd};
+use kvm_ioctls::{Cap, Kvm, VcpuExit, VmFd};
 use std::io::Write;
 
 type Result<T> = core::result::Result<T, Error>;
@@ -37,8 +38,10 @@ pub enum Error {
     VmMemoryMappingNotReadable(PhysAddr),
     #[error("Memory request exceeds max memory: {0}")]
     VmMemoryRequestExceedsMaxMemory(u64),
-    #[error("Error during hypercall execution")]
+    #[error("Error during hypercall execution: {0}")]
     HypercallError(#[from] registry::Error),
+    #[error("Error during upcall execution: {0}")]
+    UpcallError(#[from] ExitCode),
     #[error("VCPU error: {0:?}")]
     Vcpu(#[from] vcpu::Error),
     #[error("Setup error: {0:?}")]
@@ -53,7 +56,8 @@ pub struct Vm {
     vm: VmFd,
     vcpu: Vcpu,
     manager: Allocator,
-    registry: FunctionRegistry,
+    hypercalls: FunctionRegistry,
+    upcalls: FunctionRegistry,
     mem_mappings: RegionCollection,
 }
 
@@ -86,7 +90,8 @@ impl Vm {
             vm,
             vcpu,
             manager,
-            registry: FunctionRegistry::default(),
+            hypercalls: FunctionRegistry::default(),
+            upcalls: FunctionRegistry::default(),
             mem_mappings: RegionCollection::new(),
         })
     }
@@ -178,7 +183,7 @@ impl Vm {
                             secondary: regs.r9,
                         };
                         log::debug!("Parameter: signature={}, transport={}", sig, transport);
-                        let output = self.registry.try_execute(sig, transport)?;
+                        let output = self.hypercalls.try_execute(sig, transport)?;
                         regs.r8 = output.primary;
                         regs.r9 = output.secondary;
                         log::debug!("Result: transport={}", output);
@@ -225,8 +230,18 @@ impl Vm {
     }
 
     /// Expose the guest memory allocator used by this VM instance
-    pub fn allocatort(&self) -> &Allocator {
+    pub fn allocator(&self) -> &Allocator {
         &self.manager
+    }
+
+    pub fn execute<P, R>(&self, func: &str, params: P) -> Result<R>
+    where
+        P: Params,
+        R: ForeignShareable,
+    {
+        let sig = compute_signature::<P, R>(func);
+
+        unimplemented!()
     }
 
     fn alloc_stack(
@@ -373,6 +388,18 @@ impl Vm {
             Err(Error::VmMemoryMappingNotFound(paddr))
         }
     }
+}
+
+fn compute_signature<P, R>(func: &str) -> u64
+where
+    P: Params,
+    R: ForeignShareable,
+{
+    let mut hasher = SignatureHasher::new();
+    hasher.write(func.as_bytes());
+    hasher.write(<P as TypeSignature>::SIGNATURE.to_le_bytes().as_ref());
+    hasher.write(<R as TypeSignature>::SIGNATURE.to_le_bytes().as_ref());
+    hasher.finish()
 }
 
 impl Drop for Vm {

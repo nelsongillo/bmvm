@@ -32,7 +32,7 @@ impl Runtime {
 
         let vm = vm::Vm::new(cfg)?;
         let linker = Linker::new(Config::default());
-        let executable = ExecBundle::from_buffer(buffer, vm.allocatort())?;
+        let executable = ExecBundle::from_buffer(buffer, vm.allocator())?;
 
         Ok(Self {
             vm,

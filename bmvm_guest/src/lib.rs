@@ -13,7 +13,7 @@ pub use panic::{exit_with_code, halt, panic, panic_with_code};
 
 // re-export: bmvm-common
 pub use bmvm_common::error::ExitCode;
-pub use bmvm_common::hash::Djb2;
+pub use bmvm_common::hash::SignatureHasher;
 pub use bmvm_common::mem::{
     Foreign, ForeignBuf, ForeignShareable, OffsetPtr, Owned, OwnedBuf, OwnedShareable,
     RawOffsetPtr, Shared, SharedBuf, Transport, Unpackable, alloc, alloc_buf, dealloc, dealloc_buf,

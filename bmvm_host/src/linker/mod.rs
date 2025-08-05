@@ -1,5 +1,5 @@
+pub mod hypercall;
 mod linker;
-mod registry;
+pub mod upcall;
 
 pub use linker::*;
-pub use registry::*;

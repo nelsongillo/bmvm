@@ -21,7 +21,7 @@ pub fn derive_type_signature_impl(input: TokenStream) -> TokenStream {
         Ok(crate_name) => crate_name,
         Err(e) => return e.into_compile_error().into(),
     };
-    let type_djb2 = quote! {#crate_bmvm::Djb2};
+    let type_djb2 = quote! {#crate_bmvm::SignatureHasher};
     let type_type_hash = quote! {#crate_bmvm::TypeSignature};
 
     // Enforce correct representation

@@ -1,6 +1,7 @@
 #![feature(new_range_api)]
 #![feature(allocator_api)]
 #![feature(iterator_try_collect)]
+#![feature(adt_const_params)]
 
 mod alloc;
 mod elf;
@@ -12,7 +13,7 @@ mod vm;
 use bmvm_common::mem::{AddrSpace, DefaultAddrSpace, align_floor};
 use std::sync::OnceLock;
 
-pub use bmvm_common::hash::Djb2;
+pub use bmvm_common::hash::SignatureHasher;
 pub use bmvm_common::mem::{
     Foreign, ForeignBuf, ForeignShareable, Owned, OwnedBuf, OwnedShareable, Shared, SharedBuf,
     Transport, Unpackable,
@@ -26,7 +27,7 @@ pub use bmvm_common::TypeSignature;
 // re-export bmvm-macros
 pub use bmvm_macros::{TypeSignature, expose_host as expose};
 
-pub use linker::{CallableFunction, HypercallResult, WrapperFunc};
+pub use linker::hypercall::{CallableFunction, HypercallResult, WrapperFunc};
 pub use runtime::*;
 pub use vm::{Config, ConfigBuilder};
 

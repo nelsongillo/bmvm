@@ -3,6 +3,7 @@
 #![feature(sync_unsafe_cell)]
 #![feature(allocator_api)]
 #![feature(slice_as_array)]
+#![feature(macro_metavar_expr_concat)]
 #[cfg(feature = "std")]
 extern crate alloc;
 extern crate core;

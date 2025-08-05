@@ -1,16 +1,17 @@
-/// variation on the DJB2 hash algorithm limited to 32bit integer
+/// Signature hasher implements the hashing algorithm used to compute function and type
+/// signatures. The here-used algorithm is DJB2.
 #[repr(transparent)]
-pub struct Djb2(u64);
+pub struct SignatureHasher(u64);
 
-impl Djb2 {
+impl SignatureHasher {
     const OFFSET: u64 = 5381;
 
-    /// Create a new Djb2 hasher instance
+    /// Create a new hasher instance
     pub const fn new() -> Self {
         Self(Self::OFFSET)
     }
 
-    /// Create a new Djb2 hasher instance from a partial result. Useful for incremental hashing.
+    /// Create a new hasher instance from a partial result. Useful for incremental hashing.
     pub const fn from_partial(partial: u64) -> Self {
         Self(partial)
     }
@@ -36,17 +37,17 @@ impl Djb2 {
     /// Hash an input. Same as creating a new instance, writing the single input and finishing.
     ///
     /// ```rust
-    /// use bmvm_common::hash::Djb2;
+    /// use bmvm_common::hash::SignatureHasher;
     ///
     /// let input = b"hello, World!";
     ///
-    /// let mut verbose = Djb2::new();
+    /// let mut verbose = SignatureHasher::new();
     /// verbose.write(input);
     ///
-    /// assert_eq!(verbose.finish(), Djb2::hash(input));
+    /// assert_eq!(verbose.finish(), SignatureHasher::hash(input));
     /// ```
     pub const fn hash(input: &[u8]) -> u64 {
-        let mut hasher = Djb2::new();
+        let mut hasher = SignatureHasher::new();
         hasher.write(input);
         hasher.finish()
     }
@@ -58,14 +59,14 @@ mod tests {
 
     #[test]
     fn test() {
-        let zero = Djb2::new();
+        let zero = SignatureHasher::new();
         assert_eq!(5381, zero.finish());
 
-        let mut hello_en = Djb2::new();
+        let mut hello_en = SignatureHasher::new();
         hello_en.write("hello".as_bytes());
         assert_eq!(210714636441, hello_en.finish());
 
-        let mut hello_de = Djb2::new();
+        let mut hello_de = SignatureHasher::new();
         hello_de.write("hallo".as_bytes());
         assert_eq!(210714492693, hello_de.finish());
     }

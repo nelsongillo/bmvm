@@ -1,4 +1,4 @@
-use bmvm_common::hash::Djb2;
+use bmvm_common::hash::SignatureHasher;
 use bmvm_common::vmi::FnCall;
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::{Ident, Span, TokenStream};
@@ -102,7 +102,7 @@ pub(crate) fn find_crate(src: &str) -> Result<Ident, Error> {
 /// build the suffix for generated function and struct names based on the calling span
 pub(crate) fn suffix() -> String {
     let span = proc_macro::Span::call_site();
-    let mut hasher = Djb2::new();
+    let mut hasher = SignatureHasher::new();
     hasher.write(span.file().as_bytes());
     hasher.write(span.line().to_string().as_bytes());
     hasher.write(span.column().to_string().as_bytes());
@@ -137,7 +137,7 @@ pub(crate) fn create_fn_call(
     };
 
     // Initializing the function signature
-    let init_sig = Djb2::hash(fn_name.to_string().as_bytes());
+    let init_sig = SignatureHasher::hash(fn_name.to_string().as_bytes());
 
     #[cfg(any(
         all(debug_assertions, not(feature = "vmi-no-debug")),
@@ -355,9 +355,9 @@ pub fn gen_callmeta(
         )
     })?);
 
-    // construct fully qualified name for Djb2 and TypeSignature for use in the macro output
+    // construct fully qualified name for SignatureHasher and TypeSignature for use in the macro output
     let crate_bmvm = find_crate(MOTHER_CRATE)?;
-    let ty_hash = quote! {#crate_bmvm::Djb2};
+    let ty_hash = quote! {#crate_bmvm::SignatureHasher};
     let ty_typesignature = quote! {#crate_bmvm::TypeSignature};
 
     // Convert each string to a syn::Type and quote the hashing line
@@ -366,13 +366,13 @@ pub fn gen_callmeta(
         .enumerate()
         .map(|(idx, ty)| {
             quote! {
-                hasher.write(&(#idx as u64).to_le_bytes());
-                hasher.write(&<#ty as #ty_typesignature>::SIGNATURE.to_le_bytes());
+                hasher.write((#idx as u64).to_le_bytes().as_slice());
+                hasher.write(<#ty as #ty_typesignature>::SIGNATURE.to_le_bytes().as_slice());
             }
         })
         .collect::<Vec<_>>();
     hash_lines.push(quote! {
-        hasher.write(&<#return_type as #ty_typesignature>::SIGNATURE.to_le_bytes());
+        hasher.write(<#return_type as #ty_typesignature>::SIGNATURE.to_le_bytes().as_slice());
     });
 
     // The FnCall signature is stored in the first 8 bytes of the FnCall data. At the moment it is

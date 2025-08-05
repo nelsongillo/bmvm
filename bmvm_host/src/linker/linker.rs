@@ -1,7 +1,6 @@
 use crate::elf::ExecBundle;
-use crate::linker::{CallableFunction, ConversionError, Function, Params};
+use crate::linker::hypercall::{CallableFunction, ConversionError, Function};
 use bmvm_common::vmi::{FnCall, Signature};
-use bmvm_common::{TypeSignature, vmi};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 
