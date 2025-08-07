@@ -1,9 +1,11 @@
+use crate::linker::Func;
 use bmvm_common::error::ExitCode;
 use bmvm_common::mem::Transport;
 use bmvm_common::vmi;
 use bmvm_common::vmi::{FnCall, Signature};
 use std::cmp::Ordering;
 use std::ffi::IntoStringError;
+use std::fmt::{Display, Formatter};
 
 inventory::collect!(CallableFunction);
 
@@ -18,13 +20,16 @@ pub struct CallableFunction {
     pub func: WrapperFunc,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Function {
-    pub sig: Signature,
-    pub name: String,
-    pub params: Vec<String>,
-    pub output: Option<String>,
-    pub func: WrapperFunc,
+    pub func: Func,
+    pub call: WrapperFunc,
+}
+
+impl Display for Function {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.func)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -54,18 +59,20 @@ impl TryFrom<&CallableFunction> for Function {
         };
 
         Ok(Function {
-            sig,
-            name,
-            params,
-            output,
-            func,
+            func: Func {
+                name,
+                sig,
+                params,
+                output,
+            },
+            call: func,
         })
     }
 }
 
 impl PartialEq for Function {
     fn eq(&self, other: &Self) -> bool {
-        self.sig.eq(&(other.sig as u64))
+        self.func.eq(&other.func)
     }
 }
 
@@ -79,6 +86,6 @@ impl PartialOrd for Function {
 
 impl Ord for Function {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.name.cmp(&other.name)
+        self.func.cmp(&other.func)
     }
 }

@@ -252,6 +252,10 @@ impl<T: TypeSignature> TypeSignature for OffsetPtr<T> {
         h.finish()
     };
     const IS_PRIMITIVE: bool = false;
+    #[cfg(feature = "vmi-consume")]
+    fn name() -> String {
+        String::from(format!("OffsetPtr<{}>", T::name()))
+    }
 }
 
 /// Owned allocation for future sharing with the VMI peer.
@@ -304,6 +308,10 @@ impl<T: TypeSignature> TypeSignature for Shared<T> {
         h.finish()
     };
     const IS_PRIMITIVE: bool = false;
+    #[cfg(feature = "vmi-consume")]
+    fn name() -> String {
+        String::from(format!("Shared<{}>", T::name()))
+    }
 }
 
 #[sealed::sealed]
@@ -391,6 +399,10 @@ impl TypeSignature for SharedBuf {
         h.finish()
     };
     const IS_PRIMITIVE: bool = false;
+    #[cfg(feature = "vmi-consume")]
+    fn name() -> String {
+        String::from("SharedBuf")
+    }
 }
 
 #[sealed::sealed]
@@ -462,6 +474,10 @@ impl<T: TypeSignature> TypeSignature for Foreign<T> {
         h.finish()
     };
     const IS_PRIMITIVE: bool = false;
+    #[cfg(feature = "vmi-consume")]
+    fn name() -> String {
+        String::from(format!("Foreign<{}>", T::name()))
+    }
 }
 
 impl<T: TypeSignature> TypeSignature for &Foreign<T> {
@@ -471,6 +487,11 @@ impl<T: TypeSignature> TypeSignature for &Foreign<T> {
         h.finish()
     };
     const IS_PRIMITIVE: bool = false;
+
+    #[cfg(feature = "vmi-consume")]
+    fn name() -> String {
+        String::from(format!("&Foreign<{}>", T::name()))
+    }
 }
 
 impl<T: TypeSignature> Drop for Foreign<T> {
@@ -524,6 +545,10 @@ impl TypeSignature for ForeignBuf {
         h.finish()
     };
     const IS_PRIMITIVE: bool = false;
+    #[cfg(feature = "vmi-consume")]
+    fn name() -> String {
+        String::from("ForeignBuf")
+    }
 }
 
 impl TypeSignature for &ForeignBuf {
@@ -533,6 +558,10 @@ impl TypeSignature for &ForeignBuf {
         h.finish()
     };
     const IS_PRIMITIVE: bool = false;
+    #[cfg(feature = "vmi-consume")]
+    fn name() -> String {
+        String::from("&ForeignBuf")
+    }
 }
 
 #[sealed::sealed]

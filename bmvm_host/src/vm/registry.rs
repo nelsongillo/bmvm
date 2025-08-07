@@ -25,12 +25,12 @@ impl Default for FunctionRegistry {
 
 impl FunctionRegistry {
     pub fn try_execute(&self, sig: Signature, transport: Transport) -> Result<Transport> {
-        let idx = match self.inner.binary_search_by_key(&sig, |f| f.sig) {
+        let idx = match self.inner.binary_search_by_key(&sig, |f| f.func.sig) {
             Ok(idx) => idx,
             Err(_) => return Err(Error::UnknownFunction(sig)),
         };
 
-        let func = self.inner[idx].func;
+        let func = self.inner[idx].call;
         let output = func(transport)?;
         Ok(output)
     }

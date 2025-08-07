@@ -79,6 +79,16 @@ pub fn derive_type_signature_impl(input: TokenStream) -> TokenStream {
     };
     computable_hashes.push(quote! {hasher.finish()});
 
+    #[cfg(feature = "host")]
+    let impl_name = quote! {
+        fn name() -> String {
+                stringify!(#name).to_string()
+            }
+    };
+
+    #[cfg(feature = "guest")]
+    let impl_name = quote! {};
+
     // Compute the expression for the final hash value
     quote! {
         impl #type_type_hash for #name {
@@ -88,6 +98,7 @@ pub fn derive_type_signature_impl(input: TokenStream) -> TokenStream {
             const IS_PRIMITIVE: bool = {
                 #is_primitive
             };
+            #impl_name
         }
     }
     .into()

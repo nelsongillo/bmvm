@@ -239,8 +239,6 @@ impl Vm {
         P: Params,
         R: ForeignShareable,
     {
-        let sig = compute_signature::<P, R>(func);
-
         unimplemented!()
     }
 
@@ -388,18 +386,6 @@ impl Vm {
             Err(Error::VmMemoryMappingNotFound(paddr))
         }
     }
-}
-
-fn compute_signature<P, R>(func: &str) -> u64
-where
-    P: Params,
-    R: ForeignShareable,
-{
-    let mut hasher = SignatureHasher::new();
-    hasher.write(func.as_bytes());
-    hasher.write(<P as TypeSignature>::SIGNATURE.to_le_bytes().as_ref());
-    hasher.write(<R as TypeSignature>::SIGNATURE.to_le_bytes().as_ref());
-    hasher.finish()
 }
 
 impl Drop for Vm {

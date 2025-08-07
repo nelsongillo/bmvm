@@ -288,6 +288,29 @@ impl FnCall {
     }
 }
 
+#[cfg(feature = "vmi-consume")]
+impl core::fmt::Display for FnCall {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let result = self
+            .debug_return_type
+            .clone()
+            .map(|r| format!(" -> {}", r.to_string_lossy()));
+        let params = self
+            .debug_param_types
+            .iter()
+            .map(|p| p.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(", ");
+        write!(
+            f,
+            "{}({}){}",
+            self.name.to_string_lossy(),
+            params,
+            result.unwrap_or_default()
+        )
+    }
+}
+
 impl PartialOrd for FnCall {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
