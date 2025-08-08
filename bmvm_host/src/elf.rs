@@ -4,8 +4,11 @@ use bmvm_common::mem::{
     Align, AlignedNonZeroUsize, DefaultAlign, Flags, LayoutTableEntry, MAX_REGION_SIZE, PhysAddr,
     align_ceil, align_floor,
 };
-use bmvm_common::vmi::{Error as VmiError, FnCall};
-use bmvm_common::{BMVM_META_SECTION_DEBUG, BMVM_META_SECTION_EXPOSE, BMVM_META_SECTION_HOST};
+use bmvm_common::vmi::{Error as VmiError, FnCall, UpcallFn};
+use bmvm_common::{
+    BMVM_META_SECTION_DEBUG, BMVM_META_SECTION_EXPOSE, BMVM_META_SECTION_EXPOSE_CALLS,
+    BMVM_META_SECTION_HOST,
+};
 use goblin::elf;
 use goblin::elf::{Elf, ProgramHeader};
 use goblin::elf32::header::machine_to_str;
@@ -22,45 +25,36 @@ type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     #[error("path is not a file: {0}")]
     NotAFile(String),
-
     #[error("file at path {path} is to small: required min {min} but got {size}")]
     FileTooSmall {
         path: String,
         min: usize,
         size: usize,
     },
-
     #[error("Unsupported machine: {0}")]
     UnsupportedPlatform(&'static str),
-
     #[error("unknown section at index {0}")]
     ElfUnnamedSection(usize),
-
     #[error("section {name} too large: got {size} but only supports up to {max}")]
     ElfSectionTooLarge { name: String, max: u64, size: u64 },
-
     #[error("no associated section found for LOAD segment at index {0}")]
     ElfNoSectionForSegment(usize),
-
     #[error("unsupported section {0}")]
     ElfUnsupportedSection(String),
-
     #[error("Invalid entry point: {0}")]
     InvalidEntryPoint(u64),
-
+    #[error("Insufficient upcall pointer: want {want} but got {got}")]
+    InsufficientUpcallPointer { want: usize, got: usize },
     #[error("Unable to parse ELF: {0}")]
     ElfParse(#[from] goblin::error::Error),
-
     #[error("Unable to parse VMI section {section}: {source:?}")]
     VmiParse {
         section: String,
         #[source]
         source: VmiError,
     },
-
     #[error("{0}")]
     Alloc(#[from] region::Error),
-
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
 }
@@ -95,6 +89,7 @@ pub struct ExecBundle {
     /// All function calls exposed by the guest, which are callable by the host
     /// The vector is guaranteed to be sorted.
     pub(crate) expose: Vec<FnCall>,
+    pub(crate) upcalls: Vec<UpcallFn>,
     /// All function calls expected to be provided to the guest by the host.
     /// The vector is guaranteed to be sorted.
     pub(crate) host: Vec<FnCall>,
@@ -149,14 +144,25 @@ impl ExecBundle {
         }
 
         let vmi_debug = Self::is_vmi_debug(&elf);
-        let expose = Self::parse_vmi_vec(&elf, &buf.as_ref(), BMVM_META_SECTION_EXPOSE, vmi_debug)?;
         let host = Self::parse_vmi_vec(&elf, &buf.as_ref(), BMVM_META_SECTION_HOST, vmi_debug)?;
+        let expose = Self::parse_vmi_vec(&elf, &buf.as_ref(), BMVM_META_SECTION_EXPOSE, vmi_debug)?;
+        let upcalls = if !expose.is_empty() {
+            Self::parse_upcall_ptr(
+                &elf,
+                &buf.as_ref(),
+                BMVM_META_SECTION_EXPOSE_CALLS,
+                expose.len(),
+            )?
+        } else {
+            Vec::new()
+        };
 
         Ok(Self {
             entry,
             mem_regions,
             layout,
             expose,
+            upcalls,
             host,
         })
     }
@@ -209,6 +215,37 @@ impl ExecBundle {
                     section: section_name.to_string(),
                     source: e,
                 })?;
+            // ensure to sort the function calls
+            calls.sort();
+            return Ok(calls);
+        }
+
+        Ok(Vec::new())
+    }
+
+    fn parse_upcall_ptr(
+        elf: &Elf,
+        buf: &[u8],
+        section_name: &str,
+        count: usize,
+    ) -> Result<Vec<UpcallFn>> {
+        if let Some(idx) = Self::find_section_header(elf, section_name) {
+            let section = &elf.section_headers[idx];
+            let content =
+                &buf[section.sh_offset as usize..(section.sh_offset + section.sh_size) as usize];
+
+            let size = size_of::<UpcallFn>();
+            if content.len() < count * size {
+                return Err(Error::InsufficientUpcallPointer {
+                    want: count,
+                    got: content.len() / size,
+                });
+            }
+
+            let mut calls = UpcallFn::try_from_bytes_vec(content).map_err(|e| Error::VmiParse {
+                section: section_name.to_string(),
+                source: e,
+            })?;
             // ensure to sort the function calls
             calls.sort();
             return Ok(calls);

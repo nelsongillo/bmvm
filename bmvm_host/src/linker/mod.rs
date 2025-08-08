@@ -6,15 +6,14 @@ pub mod upcall;
 use crate::linker::hypercall::Function;
 use bmvm_common::TypeSignature;
 use bmvm_common::hash::SignatureHasher;
-use bmvm_common::mem::ForeignShareable;
 use bmvm_common::registry::Params;
-use bmvm_common::vmi::Signature;
+use bmvm_common::vmi::{ForeignShareable, Signature};
 pub use config::*;
 pub use linker::*;
 use std::cmp::Ordering;
 use std::fmt::{Display, Formatter};
 
-const fn compute_signature<P, R>(func: &'static str) -> u64
+pub const fn compute_signature<P, R>(func: &'static str) -> u64
 where
     P: Params,
     R: ForeignShareable,

@@ -180,8 +180,8 @@ fn gen_wrapper(mother: &Ident, fn_name: &Ident, fn_name_wrapper: &Ident, params:
                     "hlt",
                     "mov r8, {0}",
                     "mov r9, {1}",
-                    in(reg) __output.primary,
-                    in(reg) __output.secondary,
+                    in(reg) __output.primary(),
+                    in(reg) __output.secondary(),
                 );
             }
         }

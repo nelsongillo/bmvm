@@ -1,7 +1,11 @@
-use crate::TypeSignature;
-#[allow(unused_imports)]
 use crate::hash::SignatureHasher;
-use crate::mem::ForeignShareable;
+use crate::mem::{Error as MemError, Shared, alloc};
+#[allow(unused_imports)]
+use crate::typesignature::TypeSignature;
+use crate::vmi::{OwnedShareable, Transport};
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
 
 /// This trait is used to enforce the rule that functions intended for cross-boundary calls must
 /// have parameters which are either primitives implementing the `Type` trait or passable messages.
@@ -12,25 +16,30 @@ use crate::mem::ForeignShareable;
 pub trait Params: TypeSignature {
     // TODO: could this be a const field to improve startup time?
     fn strings() -> Vec<String>;
+    fn into_transport(self) -> Result<Transport, MemError>;
 }
 
-// explicitly impl Params for (), as it would be more trouble to have a special case for it,!
-// due to the special TypeSignature implementation
 #[sealed::sealed]
 impl Params for () {
     fn strings() -> Vec<String> {
         vec![]
     }
-}
-
-#[sealed::sealed]
-impl<T: ForeignShareable> Params for (T,) {
-    fn strings() -> Vec<String> {
-        vec![T::name()]
+    fn into_transport(self) -> Result<Transport, MemError> {
+        Ok(<() as OwnedShareable>::into_transport(self))
     }
 }
 
-impl<T: ForeignShareable> TypeSignature for (T,) {
+#[sealed::sealed]
+impl<T: OwnedShareable> Params for (T,) {
+    fn strings() -> Vec<String> {
+        vec![T::name()]
+    }
+    fn into_transport(self) -> Result<Transport, MemError> {
+        Ok(self.0.into_transport())
+    }
+}
+
+impl<T: OwnedShareable> TypeSignature for (T,) {
     // inherit signature from, as single value tuples should be treated as non-tuple values
     const SIGNATURE: u64 = T::SIGNATURE;
     // inherit primitive state from, as single value tuples should be treated as non-tuple values
@@ -72,13 +81,19 @@ macro_rules! impl_params_and_typesignature {
             $(pub $t: $t),*
         }
 
-        impl<$($t),+> From<($($t,)+)> for ${concat(Tuple, $n)} <$($t),*>
+        impl<$($t),+> TryFrom<($($t,)+)> for Shared<${concat(Tuple, $n)}<$($t),*>>
         where
             $($t: TypeSignature,)*
         {
-            fn from(tuple: ($($t,)+)) -> Self {
+            type Error = MemError;
+            fn try_from(tuple: ($($t,)+)) -> Result<Self, MemError> {
+                let mut owned = unsafe { alloc::<${concat(Tuple, $n)}<$($t),*>>() }?;
+                let this = owned.as_mut();
                 let ($($t,)+) = tuple;
-                Self { $($t),+ }
+                $(
+                    this.$t = $t;
+                )*
+                Ok(owned.into_shared())
             }
         }
 
@@ -110,6 +125,19 @@ macro_rules! impl_params_and_typesignature {
         impl<$($t),*> Params for ($($t,)*) where $($t: TypeSignature,)* {
             fn strings() -> Vec<String> {
                 vec![$($t::name()),*]
+            }
+
+            fn into_transport(self) -> Result<Transport, MemError> {
+                let mut owned = unsafe { alloc::<${concat(Tuple, $n)}<$($t),*>>() }?;
+                let this = owned.as_mut();
+                let ($($t,)+) = self;
+                $(
+                    this.$t = $t;
+                )*
+                let transport = owned
+                    .into_shared()
+                    .into_transport();
+                Ok(transport)
             }
         }
 

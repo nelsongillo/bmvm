@@ -10,7 +10,7 @@ pub fn panic(_info: &PanicInfo) -> ! {
 
 /// Trigger VM exit with the provided exit code
 pub fn exit_with_code(code: ExitCode) -> ! {
-    write_additional_values(code);
+    write_additional_values(&code);
     unsafe {
         asm!(
             "hlt",
@@ -32,11 +32,11 @@ pub fn halt() -> ! {
 }
 
 /// Write additional values to registers before VM exit.
-fn write_additional_values(code: ExitCode) {
+fn write_additional_values(code: &ExitCode) {
     unsafe {
         match code {
             ExitCode::UnknownUpcall(sig) => asm!("mov rbx, {}", in(reg) sig),
-            ExitCode::Unmapped(code) => asm!("mov bl, {}", in(reg_byte) code),
+            ExitCode::Unmapped(c) => asm!("mov bl, {}", in(reg_byte) c.clone()),
             _ => {}
         }
     }

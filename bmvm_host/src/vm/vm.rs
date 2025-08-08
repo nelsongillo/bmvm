@@ -1,16 +1,17 @@
 use crate::alloc::{Allocator, ReadWrite, Region, RegionCollection};
 use crate::elf::ExecBundle;
-use crate::vm::registry::FunctionRegistry;
+use crate::vm::registry::{Hypercalls, Upcalls};
 use crate::vm::vcpu::Vcpu;
 use crate::vm::{Config, registry, setup, vcpu};
 use crate::{GUEST_STACK_ADDR, GUEST_SYSTEM_ADDR, GUEST_TMP_SYSTEM_SIZE};
 use bmvm_common::error::ExitCode;
 use bmvm_common::hash::SignatureHasher;
 use bmvm_common::mem::{
-    Align, AlignedNonZeroUsize, DefaultAddrSpace, DefaultAlign, Flags, ForeignShareable,
-    LayoutTableEntry, PhysAddr, Transport, VirtAddr, align_floor, virt_to_phys,
+    Align, AlignedNonZeroUsize, DefaultAddrSpace, DefaultAlign, Flags, LayoutTableEntry, PhysAddr,
+    VirtAddr, align_floor, virt_to_phys,
 };
 use bmvm_common::registry::Params;
+use bmvm_common::vmi::{ForeignShareable, Transport};
 use bmvm_common::{
     BMVM_MEM_LAYOUT_TABLE, BMVM_TMP_GDT, BMVM_TMP_IDT, BMVM_TMP_PAGING, BMVM_TMP_SYS,
     region_abs_offset,
@@ -39,9 +40,9 @@ pub enum Error {
     #[error("Memory request exceeds max memory: {0}")]
     VmMemoryRequestExceedsMaxMemory(u64),
     #[error("Error during hypercall execution: {0}")]
-    HypercallError(#[from] registry::Error),
+    HypercallError(registry::Error),
     #[error("Error during upcall execution: {0}")]
-    UpcallError(#[from] ExitCode),
+    UpcallError(registry::Error),
     #[error("VCPU error: {0:?}")]
     Vcpu(#[from] vcpu::Error),
     #[error("Setup error: {0:?}")]
@@ -56,14 +57,14 @@ pub struct Vm {
     vm: VmFd,
     vcpu: Vcpu,
     manager: Allocator,
-    hypercalls: FunctionRegistry,
-    upcalls: FunctionRegistry,
+    hypercalls: Hypercalls,
+    upcalls: Upcalls,
     mem_mappings: RegionCollection,
 }
 
 impl Vm {
     /// create a new VM instance
-    pub(crate) fn new<C: Into<Config>>(cfg: C) -> Result<Self> {
+    pub(crate) fn new<CONFIG: Into<Config>>(cfg: CONFIG) -> Result<Self> {
         let kvm = Kvm::new().map_err(|e| Error::Kvm(e))?;
         let version = kvm.get_api_version();
         if version != KVM_API_VERSION as i32 {
@@ -90,10 +91,16 @@ impl Vm {
             vm,
             vcpu,
             manager,
-            hypercalls: FunctionRegistry::default(),
-            upcalls: FunctionRegistry::default(),
+            hypercalls: Hypercalls::default(),
+            upcalls: Upcalls::default(),
             mem_mappings: RegionCollection::new(),
         })
+    }
+
+    /// Pass the Host provided VMI function to the VM structure
+    pub(crate) fn link(&mut self, hypercalls: Hypercalls, upcalls: Upcalls) {
+        self.hypercalls = hypercalls;
+        self.upcalls = upcalls;
     }
 
     /// load the guest executable
@@ -132,10 +139,7 @@ impl Vm {
 
     /// run the guest
     pub(crate) fn run(&mut self) -> Result<()> {
-        self.dump_region_to_file(BMVM_TMP_SYS.as_u64(), String::from("dump_layout.bin"))?;
-
-        log::info!("Starting VM");
-
+        log::info!("Running VM");
         let mut buf_1 = Vec::with_capacity(8);
         let mut buf_2 = Vec::with_capacity(8);
 
@@ -178,14 +182,14 @@ impl Vm {
                         log::debug!("HYPERCALL TRIGGER");
                         let mut regs = self.vcpu.get_regs()?;
                         let sig = regs.rbx;
-                        let transport = Transport {
-                            primary: regs.r8,
-                            secondary: regs.r9,
-                        };
+                        let transport = Transport::new(regs.r8, regs.r9);
                         log::debug!("Parameter: signature={}, transport={}", sig, transport);
-                        let output = self.hypercalls.try_execute(sig, transport)?;
-                        regs.r8 = output.primary;
-                        regs.r9 = output.secondary;
+                        let output = self
+                            .hypercalls
+                            .try_execute(sig, transport)
+                            .map_err(Error::HypercallError)?;
+                        regs.r8 = output.primary();
+                        regs.r9 = output.secondary();
                         log::debug!("Result: transport={}", output);
                         self.vcpu.set_regs(regs);
                     }
@@ -234,12 +238,18 @@ impl Vm {
         &self.manager
     }
 
-    pub fn execute<P, R>(&self, func: &str, params: P) -> Result<R>
+    /// Execute a Guest provided function
+    pub fn execute<P, R>(&self, func: &'static str, params: P) -> Result<R>
     where
         P: Params,
         R: ForeignShareable,
     {
-        unimplemented!()
+        let func = self
+            .upcalls
+            .find_upcall::<P, R>(func)
+            .map_err(Error::UpcallError)?;
+
+        todo!()
     }
 
     fn alloc_stack(

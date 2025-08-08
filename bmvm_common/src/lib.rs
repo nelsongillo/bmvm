@@ -1,10 +1,10 @@
-#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(not(any(feature = "vmi-consume", feature = "vmi-macro")), no_std)]
 #![feature(alloc_error_handler)]
 #![feature(sync_unsafe_cell)]
 #![feature(allocator_api)]
 #![feature(slice_as_array)]
 #![feature(macro_metavar_expr_concat)]
-#[cfg(feature = "std")]
+#[cfg(feature = "vmi-consume")]
 extern crate alloc;
 extern crate core;
 
@@ -15,6 +15,7 @@ pub mod error;
 pub mod hash;
 pub mod interprete;
 pub mod mem;
+#[cfg(feature = "vmi-consume")]
 pub mod registry;
 mod typesignature;
 pub mod vmi;

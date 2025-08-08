@@ -13,16 +13,14 @@ mod vm;
 use bmvm_common::mem::{AddrSpace, DefaultAddrSpace, align_floor};
 use std::sync::OnceLock;
 
+// re-export bmvm-common
+pub use bmvm_common::TypeSignature;
 pub use bmvm_common::hash::SignatureHasher;
-pub use bmvm_common::mem::{
-    Foreign, ForeignBuf, ForeignShareable, Owned, OwnedBuf, OwnedShareable, Shared, SharedBuf,
-    Transport, Unpackable,
-};
+pub use bmvm_common::mem::{Foreign, ForeignBuf, Owned, OwnedBuf, Shared, SharedBuf, Unpackable};
 pub use bmvm_common::mem::{PhysAddr, align_ceil, alloc, alloc_buf, get_foreign};
 pub use bmvm_common::registry;
 pub use bmvm_common::vmi;
-// re-export bmvm-common
-pub use bmvm_common::TypeSignature;
+pub use bmvm_common::vmi::{ForeignShareable, OwnedShareable, Signature, Transport};
 
 // re-export bmvm-macros
 pub use bmvm_macros::{TypeSignature, expose_host as expose};

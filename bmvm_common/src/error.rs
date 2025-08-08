@@ -3,35 +3,68 @@ use crate::vmi::Signature;
 use x86_64::structures::paging::PageSize;
 use x86_64::structures::paging::mapper::MapToError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "vmi-consume",
+    derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)
+)]
 pub enum ExitCode {
     /// Program exited normally
+    #[cfg_attr(feature = "vmi-consume", error("Normal Exit"))]
     Normal,
     /// Setup complete, ready to execute functions
+    #[cfg_attr(feature = "vmi-consume", error("Ready"))]
     Ready,
     /// An invalid offset pointer was provided
+    #[cfg_attr(feature = "vmi-consume", error("Invalid offset pointer {0:x}"))]
     Ptr(RawOffsetPtr),
     /// Allocation failed
+    #[cfg_attr(feature = "vmi-consume", error("Allocation failed"))]
     AllocatorFailed,
     /// The provided layout table was too small
+    #[cfg_attr(
+        feature = "vmi-consume",
+        error("The provided layout table was too small")
+    )]
     InvalidMemoryLayoutTableTooSmall,
     /// The pointer to the layout table was misaligned
+    #[cfg_attr(
+        feature = "vmi-consume",
+        error("The pointer to the layout table was misaligned")
+    )]
     InvalidMemoryLayoutTableMisaligned,
     /// The provided layout table is invalid
+    #[cfg_attr(feature = "vmi-consume", error("The provided layout table is invalid"))]
     InvalidMemoryLayout,
     /// An additional frame was needed for the mapping process, but the frame allocator
     /// returned `None`.
+    #[cfg_attr(
+        feature = "vmi-consume",
+        error(
+            "An additional frame was needed for the mapping process, but the frame allocator returned `None`."
+        )
+    )]
     FrameAllocationFailed,
     /// An upper level page table entry has the `HUGE_PAGE` flag set, which means that the
     /// given page is part of an already mapped huge page.
+    #[cfg_attr(
+        feature = "vmi-consume",
+        error("Page already part of a huge page due to set flag in parent")
+    )]
     ParentEntryHugePage,
     /// The given page is already mapped to a physical frame.
+    #[cfg_attr(feature = "vmi-consume", error("Page already mapped"))]
     PageAlreadyMapped,
     /// The upcall signature is not known.
+    #[cfg_attr(
+        feature = "vmi-consume",
+        error("Tried to call unknown function with signature: {0}")
+    )]
     UnknownUpcall(Signature),
     /// The provided buffer capacity is Zero
+    #[cfg_attr(feature = "vmi-consume", error("Buffer capacity is ZERO"))]
     ZeroCapacity,
     /// The given exit code is not mapped to an enum variant.
+    #[cfg_attr(feature = "vmi-consume", error("Unmapped exit code: {0}"))]
     Unmapped(u8),
 }
 
@@ -55,42 +88,6 @@ impl ExitCode {
         }
     }
 }
-
-#[cfg(feature = "vmi-consume")]
-impl core::fmt::Display for ExitCode {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            ExitCode::Normal => write!(f, "Normal Exit"),
-            ExitCode::Ready => write!(f, "Ready"),
-            ExitCode::Ptr(ptr) => write!(f, "Invalid offset pointer {}", ptr),
-            ExitCode::AllocatorFailed => write!(f, "Allocation failed"),
-            ExitCode::InvalidMemoryLayoutTableTooSmall => {
-                write!(f, "The provided layout table was too small")
-            }
-            ExitCode::InvalidMemoryLayoutTableMisaligned => {
-                write!(f, "The pointer to the layout table was misaligned")
-            }
-            ExitCode::InvalidMemoryLayout => write!(f, "The provided layout table is invalid"),
-            ExitCode::FrameAllocationFailed => write!(
-                f,
-                "An additional frame was needed for the mapping process, but the frame allocator returned `None`."
-            ),
-            ExitCode::ParentEntryHugePage => write!(
-                f,
-                "Page already part of a huge page due to set flag in parent"
-            ),
-            ExitCode::PageAlreadyMapped => write!(f, "Page already mapped"),
-            ExitCode::UnknownUpcall(sig) => {
-                write!(f, "Tried to call unknown function with signature: {}", sig)
-            }
-            ExitCode::ZeroCapacity => write!(f, "Buffer capacity is ZERO"),
-            ExitCode::Unmapped(code) => write!(f, "Unmapped exit code: {}", code),
-        }
-    }
-}
-
-#[cfg(feature = "vmi-consume")]
-impl core::error::Error for ExitCode {}
 
 #[cfg(feature = "vmi-consume")]
 impl ExitCode {

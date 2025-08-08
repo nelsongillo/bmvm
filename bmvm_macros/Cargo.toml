@@ -19,4 +19,4 @@ quote = "1"
 proc-macro2 = "1"
 anyhow = "1.0.98"
 proc-macro-crate = "3.3.0"
-bmvm-common = { path = "../bmvm_common", features = ["std"]}
+bmvm-common = { path = "../bmvm_common", features = ["vmi-macro"]}

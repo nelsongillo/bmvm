@@ -1,6 +1,5 @@
 use bmvm_common::HYPERCALL_IO_PORT;
-use bmvm_common::mem::Transport;
-use bmvm_common::vmi::Signature;
+use bmvm_common::vmi::{Signature, Transport};
 use core::arch::asm;
 
 pub unsafe fn execute(sig: Signature, transport: Transport) -> Transport {
@@ -19,17 +18,14 @@ pub unsafe fn execute(sig: Signature, transport: Transport) -> Transport {
         // data does not matter, as all we care about is the function signature and ptr offset
         in("al") 0x00u8,
         func = in(reg) sig,
-        ptr = in(reg) transport.primary,
-        cap = in(reg) transport.secondary,
+        ptr = in(reg) transport.primary(),
+        cap = in(reg) transport.secondary(),
         // Post VM Exit
         // Read return value offset ptr from EAX and construct OffsetPtr
         lateout("r8") return_secondary,
         lateout("r9") return_primary,
         );
 
-        Transport {
-            primary: return_primary,
-            secondary: return_secondary,
-        }
+        Transport::new(return_primary, return_secondary)
     }
 }

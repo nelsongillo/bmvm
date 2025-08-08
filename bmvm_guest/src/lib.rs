@@ -15,11 +15,10 @@ pub use panic::{exit_with_code, halt, panic, panic_with_code};
 pub use bmvm_common::error::ExitCode;
 pub use bmvm_common::hash::SignatureHasher;
 pub use bmvm_common::mem::{
-    Foreign, ForeignBuf, ForeignShareable, OffsetPtr, Owned, OwnedBuf, OwnedShareable,
-    RawOffsetPtr, Shared, SharedBuf, Transport, Unpackable, alloc, alloc_buf, dealloc, dealloc_buf,
-    get_foreign,
+    Foreign, ForeignBuf, OffsetPtr, Owned, OwnedBuf, RawOffsetPtr, Shared, SharedBuf, Unpackable,
+    alloc, alloc_buf, dealloc, dealloc_buf, get_foreign,
 };
-pub use bmvm_common::vmi::{Signature, UpcallFn};
+pub use bmvm_common::vmi::{ForeignShareable, OwnedShareable, Signature, Transport, UpcallFn};
 pub use bmvm_common::{HYPERCALL_IO_PORT, TypeSignature};
 
 // re-export: bmvm-macros

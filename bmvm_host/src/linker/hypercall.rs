@@ -1,8 +1,7 @@
 use crate::linker::Func;
 use bmvm_common::error::ExitCode;
-use bmvm_common::mem::Transport;
 use bmvm_common::vmi;
-use bmvm_common::vmi::{FnCall, Signature};
+use bmvm_common::vmi::{FnCall, Transport};
 use std::cmp::Ordering;
 use std::ffi::IntoStringError;
 use std::fmt::{Display, Formatter};

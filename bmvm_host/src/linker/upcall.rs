@@ -1,9 +1,14 @@
 use crate::linker::{Func, compute_signature};
 use bmvm_common::TypeSignature;
-use bmvm_common::mem::ForeignShareable;
 use bmvm_common::registry::Params;
+use bmvm_common::vmi::ForeignShareable;
+use std::num::NonZeroU64;
 
-pub type Function = Func;
+#[derive(Debug)]
+pub struct Function {
+    pub(crate) base: Func,
+    pub(super) ptr: Option<NonZeroU64>,
+}
 
 impl Function {
     pub fn new<P, R>(name: &'static str) -> Self
@@ -21,10 +26,21 @@ impl Function {
         };
 
         Function {
-            sig,
-            name,
-            params,
-            output,
+            base: Func {
+                sig,
+                name,
+                params,
+                output,
+            },
+            ptr: None,
         }
+    }
+
+    pub fn link(&mut self, ptr: NonZeroU64) {
+        self.ptr = Some(ptr);
+    }
+
+    pub fn ptr(&self) -> Option<NonZeroU64> {
+        self.ptr
     }
 }

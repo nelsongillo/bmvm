@@ -1,7 +1,7 @@
 use crate::interprete::{Interpret, Zero};
 use crate::mem::{Align, DefaultAlign, PhysAddr};
 use bitflags::bitflags;
-#[cfg(feature = "std")]
+#[cfg(feature = "vmi-consume")]
 use core::fmt::{Display, Formatter};
 use x86_64::structures::paging::PageTableFlags;
 
@@ -17,12 +17,12 @@ impl LayoutTable {
         Self::default()
     }
 
-    #[cfg(feature = "std")]
+    #[cfg(feature = "vmi-consume")]
     pub fn len_present(&self) -> usize {
         self.as_vec_present().len()
     }
 
-    #[cfg(feature = "std")]
+    #[cfg(feature = "vmi-consume")]
     pub fn from_vec(vec: &[LayoutTableEntry]) -> Result<LayoutTable, &'static str> {
         if vec.len() > 512 {
             return Err("layout table cannot contain more than 512 entries");
@@ -34,7 +34,7 @@ impl LayoutTable {
         Ok(l)
     }
 
-    #[cfg(feature = "std")]
+    #[cfg(feature = "vmi-consume")]
     pub fn as_vec_present(&self) -> Vec<LayoutTableEntry> {
         self.entries
             .iter()
@@ -266,7 +266,7 @@ impl From<u64> for LayoutTableEntry {
     }
 }
 
-#[cfg(feature = "std")]
+#[cfg(feature = "vmi-consume")]
 impl Display for LayoutTableEntry {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         let addr = self.addr_raw() as usize;
@@ -322,7 +322,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "std")]
+    #[cfg(feature = "vmi-consume")]
     fn layout_len() {
         let mut layout = LayoutTable::default();
         for i in 0..5 {

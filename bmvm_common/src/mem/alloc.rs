@@ -1,7 +1,7 @@
-use crate::error::ExitCode;
 use crate::mem::{AlignedNonZeroUsize, VirtAddr};
 use crate::typesignature::TypeSignature;
 use core::alloc::{Allocator, Layout};
+use core::fmt::{LowerHex, UpperHex};
 use core::mem::ManuallyDrop;
 use core::num::NonZeroUsize;
 use core::ptr::NonNull;
@@ -11,11 +11,26 @@ use talc::{ErrOnOom, Span, Talc};
 static ALLOC_FOREIGN: Once<AllocImpl<spin::Mutex<()>, ErrOnOom>> = Once::new();
 static ALLOC_OWN: Once<AllocImpl<spin::Mutex<()>, ErrOnOom>> = Once::new();
 
+#[cfg_attr(
+    feature = "vmi-consume",
+    derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)
+)]
 pub enum Error {
+    #[cfg_attr(feature = "vmi-consume", error("allocator is not initialized"))]
     UninitializedAllocator,
+    #[cfg_attr(feature = "vmi-consume", error("Pointer is null"))]
     NullPointer,
+    #[cfg_attr(feature = "vmi-consume", error("Out of memory"))]
     OutOfMemory,
-    NotEnoughSpace,
+    #[cfg_attr(
+        feature = "vmi-consume",
+        error("Not enough space to initialize allocator")
+    )]
+    InitNotEnoughSpace,
+    #[cfg_attr(
+        feature = "vmi-consume",
+        error("Invalid offset pointer (out of bounds)")
+    )]
     InvalidOffsetPtr,
 }
 
@@ -30,7 +45,7 @@ impl<M: lock_api::RawMutex, O: talc::OomHandler> AllocImpl<M, O> {
         let mut talc = Talc::new(oom);
         let span = unsafe {
             talc.claim(arena.into())
-                .map_err(|_| Error::NotEnoughSpace)?
+                .map_err(|_| Error::InitNotEnoughSpace)?
         };
         let talck = talc.lock::<M>();
 
@@ -203,6 +218,18 @@ pub struct RawOffsetPtr {
     inner: u32,
 }
 
+impl LowerHex for RawOffsetPtr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        LowerHex::fmt(&self.inner, f)
+    }
+}
+
+impl UpperHex for RawOffsetPtr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        LowerHex::fmt(&self.inner, f)
+    }
+}
+
 #[cfg(feature = "vmi-consume")]
 impl core::fmt::Display for RawOffsetPtr {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -287,7 +314,7 @@ impl<T: TypeSignature> AsMut<T> for Owned<T> {
 
 #[repr(transparent)]
 pub struct Shared<T: TypeSignature> {
-    inner: OffsetPtr<T>,
+    pub(crate) inner: OffsetPtr<T>,
 }
 
 impl<T: TypeSignature> From<Owned<T>> for Shared<T> {
@@ -311,16 +338,6 @@ impl<T: TypeSignature> TypeSignature for Shared<T> {
     #[cfg(feature = "vmi-consume")]
     fn name() -> String {
         String::from(format!("Shared<{}>", T::name()))
-    }
-}
-
-#[sealed::sealed]
-impl<T: TypeSignature> OwnedShareable for Shared<T> {
-    fn into_transport(self) -> Transport {
-        Transport {
-            primary: self.inner.offset as u64,
-            secondary: 0,
-        }
     }
 }
 
@@ -364,8 +381,8 @@ impl AsMut<[u8]> for OwnedBuf {
 /// Shared buffer allocated for sharing with the VMI peer.
 #[repr(C)]
 pub struct SharedBuf {
-    ptr: OffsetPtr<u8>,
-    capacity: NonZeroUsize,
+    pub(crate) ptr: OffsetPtr<u8>,
+    pub(crate) capacity: NonZeroUsize,
 }
 
 impl SharedBuf {
@@ -402,16 +419,6 @@ impl TypeSignature for SharedBuf {
     #[cfg(feature = "vmi-consume")]
     fn name() -> String {
         String::from("SharedBuf")
-    }
-}
-
-#[sealed::sealed]
-impl OwnedShareable for SharedBuf {
-    fn into_transport(self) -> Transport {
-        Transport {
-            primary: self.ptr.offset as u64,
-            secondary: self.capacity.get() as u64,
-        }
     }
 }
 
@@ -503,19 +510,10 @@ impl<T: TypeSignature> Drop for Foreign<T> {
     }
 }
 
-#[sealed::sealed]
-impl<T: TypeSignature> ForeignShareable for Foreign<T> {
-    fn from_transport(t: Transport) -> Result<Self, ExitCode> {
-        let raw = RawOffsetPtr::from(t.primary as u32);
-        let ptr = OffsetPtr::from(raw);
-        unsafe { get_foreign(ptr).map_err(|_| ExitCode::Ptr(raw)) }
-    }
-}
-
 /// Foreign buffer allocated by the VMI peer.
 pub struct ForeignBuf {
-    ptr: Foreign<u8>,
-    capacity: NonZeroUsize,
+    pub(crate) ptr: Foreign<u8>,
+    pub(crate) capacity: NonZeroUsize,
 }
 
 impl AsRef<[u8]> for ForeignBuf {
@@ -561,126 +559,6 @@ impl TypeSignature for &ForeignBuf {
     #[cfg(feature = "vmi-consume")]
     fn name() -> String {
         String::from("&ForeignBuf")
-    }
-}
-
-#[sealed::sealed]
-impl ForeignShareable for ForeignBuf {
-    fn from_transport(t: Transport) -> Result<Self, ExitCode> {
-        if t.secondary == 0 {
-            return Err(ExitCode::ZeroCapacity);
-        }
-
-        let raw_capacity = t.secondary as usize;
-        let capacity = NonZeroUsize::new(raw_capacity).ok_or(ExitCode::ZeroCapacity)?;
-
-        Ok(ForeignBuf {
-            ptr: Foreign::<u8>::from_transport(t)?,
-            capacity,
-        })
-    }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-#[repr(C)]
-pub struct Transport {
-    /// primary can be a u32 offset pointer or a primitive integer/float/bool value
-    pub primary: u64,
-    /// secondary is optional, it is only used as the capacity if a buffer is shared.
-    /// If unused, should be 0
-    pub secondary: u64,
-}
-
-#[cfg(feature = "vmi-consume")]
-impl core::fmt::Display for Transport {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-impl Transport {
-    pub fn new(primary: u64, secondary: u64) -> Self {
-        Self { primary, secondary }
-    }
-}
-
-#[sealed::sealed]
-pub trait OwnedShareable: TypeSignature {
-    fn into_transport(self) -> Transport;
-}
-
-#[sealed::sealed]
-pub trait ForeignShareable: TypeSignature {
-    fn from_transport(t: Transport) -> Result<Self, ExitCode>
-    where
-        Self: Sized;
-}
-
-#[sealed::sealed]
-impl OwnedShareable for () {
-    fn into_transport(self) -> Transport {
-        Transport {
-            primary: 0,
-            secondary: 0,
-        }
-    }
-}
-
-#[sealed::sealed]
-impl ForeignShareable for () {
-    fn from_transport(_: Transport) -> Result<Self, ExitCode> {
-        Ok(())
-    }
-}
-
-macro_rules! impl_owned_shareable_for_primitives {
-    ($($prim:ty),* $(,)?) => {
-        $(
-            #[sealed::sealed]
-            impl OwnedShareable for $prim {
-                #[inline(always)]
-                fn into_transport(self) -> Transport {
-                    Transport {
-                        primary: self as u64,
-                        secondary: 0,
-                    }
-                }
-            }
-        )*
-    };
-}
-
-macro_rules! impl_foreign_shareable_for_primitives {
-    ($($prim:ty),* $(,)?) => {
-        $(
-            #[sealed::sealed]
-            impl ForeignShareable for $prim {
-                 fn from_transport(t: Transport) -> Result<Self, ExitCode> {
-                   Ok(t.primary as $prim)
-                 }
-            }
-        )*
-    };
-}
-
-impl_owned_shareable_for_primitives!(
-    u8, u16, u32, u64, u128, i8, i16, i32, i64, i128, f32, f64, usize, bool, char
-);
-impl_foreign_shareable_for_primitives!(
-    u8, u16, u32, u64, u128, i8, i16, i32, i64, i128, f32, f64, usize
-);
-
-#[sealed::sealed]
-impl ForeignShareable for bool {
-    fn from_transport(t: Transport) -> Result<Self, ExitCode> {
-        Ok(t.primary != 0)
-    }
-}
-
-#[sealed::sealed]
-impl ForeignShareable for char {
-    fn from_transport(t: Transport) -> Result<Self, ExitCode> {
-        Ok(t.primary as u8 as char)
     }
 }
 

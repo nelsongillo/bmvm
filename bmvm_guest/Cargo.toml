@@ -9,7 +9,7 @@ vmi-no-debug = ["bmvm-macros/vmi-no-debug", "bmvm-common/vmi-no-debug"]
 
 [dependencies]
 bmvm-macros = { path = "../bmvm_macros", default-features = false, features = ["guest"] }
-bmvm-common = { path = "../bmvm_common", default-features = false }
+bmvm-common = { path = "../bmvm_common", default-features = false, features = ["vmi-execute"]}
 x86_64 = { version = "0.15.2", default-features = false, features = [
     "instructions",
     "abi_x86_interrupt",

@@ -1,4 +1,4 @@
-use bmvm_host::{ConfigBuilder, Runtime};
+use bmvm_host::{ConfigBuilder, Runtime, RuntimeBuilder, linker};
 use clap::Parser;
 
 const ENV_GUEST: &str = "GUEST";
@@ -27,9 +27,14 @@ fn main() -> anyhow::Result<()> {
     log_builder.init();
 
     // configuration
-    let cfg = ConfigBuilder::new().debug(args.debug).build();
-    let mut runtime = Runtime::new(cfg, args.guest)?;
-    match runtime.run() {
+    let cfg = ConfigBuilder::new().debug(args.debug);
+
+    let mut runtime = RuntimeBuilder::new()
+        .linker(linker::ConfigBuilder::new())
+        .vm(cfg)
+        .executable(args.guest)
+        .build()?;
+    match runtime.setup() {
         Ok(_) => Ok(()),
         Err(e) => Err(anyhow::anyhow!("{:?}", e)),
     }

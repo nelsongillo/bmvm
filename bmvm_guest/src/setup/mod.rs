@@ -1,8 +1,3 @@
-/*
-TODO:
- - setup idt
- - setup host-calls
- */
 use bmvm_common::BMVM_MEM_LAYOUT_TABLE;
 use bmvm_common::error::ExitCode;
 use bmvm_common::interprete::{Interpret, InterpretError};
