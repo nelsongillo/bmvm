@@ -82,3 +82,38 @@ impl wrapper_foo() {
   foo(a, b, c);
 }
 ```
+
+## Calling
+NOTE: Calling the Guest from inside a Hypercall Implementation function is not supported!
+
+### Hypercall (Guest -> Host)
+The guest wants to call a function provided by the host. Therefore the guest needs to package the parameter using the
+established transport mechanism, and then triggers a vm exit via a write to the pre-defined IO port.
+This notifies the host to call the indicated hypercall implementation on the host side, and pass the result to the guest
+and continue the guest execution afterwards.
+
+#### Calling Convention
+* Parameters
+  * RAX: IO Port Value - Value not important
+  * RBX: Hypercall Function Signature
+  * RDX: IO_PORT_HYPERCALL
+  * R8: Transport.Primary
+  * R9: Transport.Secondary
+* Return
+  * R8: Transport.Primary
+  * R9: Transport.Secondary
+
+
+### Upcall (Host -> Guest)
+The host wants to call a function provided by the guest. Therefore the host packages the parameters, and sets the
+instruction pointer to the function entry point. The guests executes from this point and halts with the return exit code.
+
+#### Calling Convention
+* Parameters
+  * RIP: Upcall Function
+  * R8: Transport.Primary
+  * R9: Transport.Secondary
+* Return
+  * RAX: Exit Code Return   
+  * R8: Transport.Primary
+  * R9: Transport.Secondary

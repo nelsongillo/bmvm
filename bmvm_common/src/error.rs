@@ -14,6 +14,8 @@ pub enum ExitCode {
     /// Setup complete, ready to execute functions
     #[cfg_attr(feature = "vmi-consume", error("Ready"))]
     Ready,
+    #[cfg_attr(feature = "vmi-consume", error("Return"))]
+    Return,
     /// An invalid offset pointer was provided
     #[cfg_attr(feature = "vmi-consume", error("Invalid offset pointer {0:x}"))]
     Ptr(RawOffsetPtr),
@@ -94,6 +96,10 @@ impl ExitCode {
     /// Read additional values from registers after VM exit.
     pub fn read_values(self, regs: &kvm_bindings::kvm_regs) -> Self {
         match self {
+            ExitCode::Ptr(_) => {
+                let ptr: RawOffsetPtr = RawOffsetPtr::from(regs.rbx as u32);
+                ExitCode::Ptr(ptr)
+            }
             ExitCode::UnknownUpcall(_) => {
                 let sig: Signature = regs.rbx;
                 ExitCode::UnknownUpcall(sig)
@@ -122,16 +128,17 @@ impl From<u8> for ExitCode {
         match value {
             0 => ExitCode::Normal,
             1 => ExitCode::Ready,
-            2 => ExitCode::Ptr(RawOffsetPtr::from(value as u32)),
-            3 => ExitCode::AllocatorFailed,
-            4 => ExitCode::InvalidMemoryLayoutTableTooSmall,
-            5 => ExitCode::InvalidMemoryLayoutTableMisaligned,
-            6 => ExitCode::InvalidMemoryLayout,
-            7 => ExitCode::FrameAllocationFailed,
-            8 => ExitCode::ParentEntryHugePage,
-            9 => ExitCode::PageAlreadyMapped,
-            10 => ExitCode::UnknownUpcall(Signature::from(value)),
-            11 => ExitCode::ZeroCapacity,
+            2 => ExitCode::Return,
+            3 => ExitCode::Ptr(RawOffsetPtr::from(value as u32)),
+            4 => ExitCode::AllocatorFailed,
+            5 => ExitCode::InvalidMemoryLayoutTableTooSmall,
+            6 => ExitCode::InvalidMemoryLayoutTableMisaligned,
+            7 => ExitCode::InvalidMemoryLayout,
+            8 => ExitCode::FrameAllocationFailed,
+            9 => ExitCode::ParentEntryHugePage,
+            10 => ExitCode::PageAlreadyMapped,
+            11 => ExitCode::UnknownUpcall(Signature::from(value)),
+            12 => ExitCode::ZeroCapacity,
             v => ExitCode::Unmapped(v),
         }
     }
@@ -142,16 +149,17 @@ impl Into<u8> for ExitCode {
         match self {
             ExitCode::Normal => 0,
             ExitCode::Ready => 1,
-            ExitCode::Ptr(_) => 2,
-            ExitCode::AllocatorFailed => 3,
-            ExitCode::InvalidMemoryLayoutTableTooSmall => 4,
-            ExitCode::InvalidMemoryLayoutTableMisaligned => 5,
-            ExitCode::InvalidMemoryLayout => 6,
-            ExitCode::FrameAllocationFailed => 7,
-            ExitCode::ParentEntryHugePage => 8,
-            ExitCode::PageAlreadyMapped => 9,
-            ExitCode::UnknownUpcall(_) => 10,
-            ExitCode::ZeroCapacity => 11,
+            ExitCode::Return => 2,
+            ExitCode::Ptr(_) => 3,
+            ExitCode::AllocatorFailed => 4,
+            ExitCode::InvalidMemoryLayoutTableTooSmall => 5,
+            ExitCode::InvalidMemoryLayoutTableMisaligned => 6,
+            ExitCode::InvalidMemoryLayout => 7,
+            ExitCode::FrameAllocationFailed => 8,
+            ExitCode::ParentEntryHugePage => 9,
+            ExitCode::PageAlreadyMapped => 10,
+            ExitCode::UnknownUpcall(_) => 11,
+            ExitCode::ZeroCapacity => 12,
             ExitCode::Unmapped(value) => value,
         }
     }

@@ -1,5 +1,5 @@
 use crate::alloc::{Accessible, GuestOnly, Perm, ReadOnly, ReadWrite, WriteOnly};
-use bmvm_common::mem::{Align, AlignedNonZeroUsize, DefaultAlign, PhysAddr};
+use bmvm_common::mem::{Align, AlignedNonZeroUsize, Arena, DefaultAlign, PhysAddr};
 use core::ffi::c_void;
 use kvm_bindings::{
     kvm_create_guest_memfd, kvm_userspace_memory_region, kvm_userspace_memory_region2,
@@ -521,12 +521,33 @@ macro_rules! impl_as_ptr {
     };
 }
 
+macro_rules! impl_as_arena {
+    ($target:ident => $($struct:ty),* $(,)?) => {
+        $(
+            impl<A: Align> $target<$struct, A> {
+                 pub fn as_arena(&self) -> Arena {
+                    match self.storage {
+                        StorageBackend::GuestMem(_, _) => {
+                            panic!("tried to get ptr from guest memory");
+                        }
+                        StorageBackend::Mmap(ptr) => {
+                            Arena::new(ptr, self.capacity)
+                        },
+                    }
+                }
+            }
+        )*
+    };
+}
+
 impl_as_mut!(ProtoRegion => WriteOnly, ReadWrite);
 impl_write_offset!(ProtoRegion => WriteOnly, ReadWrite);
+impl_as_arena!(ProtoRegion => WriteOnly, ReadWrite);
 
 impl_as_mut!(Region => WriteOnly, ReadWrite);
 impl_write_offset!(Region => WriteOnly, ReadWrite);
 impl_write_addr!(Region => WriteOnly, ReadWrite);
+impl_as_arena!(Region => WriteOnly, ReadWrite);
 
 impl Into<RegionEntry> for Region<ReadOnly> {
     fn into(self) -> RegionEntry {

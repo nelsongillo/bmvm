@@ -143,6 +143,12 @@ pub struct Arena {
     pub capacity: AlignedNonZeroUsize,
 }
 
+impl Arena {
+    pub fn new(ptr: NonNull<u8>, capacity: AlignedNonZeroUsize) -> Self {
+        Self { ptr, capacity }
+    }
+}
+
 impl Into<Span> for Arena {
     fn into(self) -> Span {
         Span::from_base_size(self.ptr.as_ptr(), self.capacity.get())

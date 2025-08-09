@@ -1,13 +1,13 @@
 use crate::linker::{Func, compute_signature};
 use bmvm_common::TypeSignature;
 use bmvm_common::registry::Params;
-use bmvm_common::vmi::ForeignShareable;
+use bmvm_common::vmi::{FnPtr, ForeignShareable};
 use std::num::NonZeroU64;
 
 #[derive(Debug)]
 pub struct Function {
     pub(crate) base: Func,
-    pub(super) ptr: Option<NonZeroU64>,
+    pub(super) ptr: Option<FnPtr>,
 }
 
 impl Function {
@@ -36,11 +36,11 @@ impl Function {
         }
     }
 
-    pub fn link(&mut self, ptr: NonZeroU64) {
+    pub fn link(&mut self, ptr: FnPtr) {
         self.ptr = Some(ptr);
     }
 
-    pub fn ptr(&self) -> Option<NonZeroU64> {
+    pub fn ptr(&self) -> Option<FnPtr> {
         self.ptr
     }
 }

@@ -104,6 +104,7 @@ pub fn expose_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
 /// Generates the upcall wrapper, which will be called by the Upcall-Handler
 fn gen_wrapper(mother: &Ident, fn_name: &Ident, fn_name_wrapper: &Ident, params: &ParamType) -> TS {
+    let exit_code_return = quote! {#mother::ExitCode::Return};
     let ty_transport = quote! {#mother::Transport};
     let foreign = quote! {#mother::Foreign};
     let foreign_shareable = quote! {#mother::ForeignShareable};
@@ -175,13 +176,14 @@ fn gen_wrapper(mother: &Ident, fn_name: &Ident, fn_name_wrapper: &Ident, params:
             use #owned_shareable;
             let __output = #var_return.into_transport();
             // Halt to indicate function exit and populate return registers
+            let __exit_code: u8 = #exit_code_return.into();
             unsafe {
                 core::arch::asm! (
+                    "mov {0}, bl",
                     "hlt",
-                    "mov r8, {0}",
-                    "mov r9, {1}",
-                    in(reg) __output.primary(),
-                    in(reg) __output.secondary(),
+                    in(reg_byte) __exit_code,
+                    in("r8") __output.primary(),
+                    in("r9") __output.secondary(),
                 );
             }
         }

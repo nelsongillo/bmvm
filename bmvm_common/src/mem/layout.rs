@@ -91,20 +91,19 @@ bitflags! {
     #[derive(Copy, Clone, PartialEq, Eq)]
     pub struct Flags: u8 {
         /// Indicates the entrys presence.
-        const PRESENT = 1;
+        const PRESENT = 0b0000_0001;
         ///  0 -> User; 1 -> System structures
-        const SYSTEM = 1 << 1;
+        const USER = 0b0000_0000;
+        const SYSTEM = 0b0000_0010;
+        const STACK = 0b0000_0100;
         /// 0 -> Data; 1 -> Code/Executable
-        const CODE = 1 << 2;
+        const CODE = 0b0000_1000;
+        const DATA = 0b0000_0000;
         /// 0 -> Read; 1 -> Write
-        const WRITE = 1 << 3;
-        const STACK = 1 << 4;
-        // const have no real purpose besides making it more explicit to create
-        // eg: a user read only data section. Using USER | READ | DATA is the same as Flags::empty()
-        // but more explicit.
-        const USER = 0 << 1;
-        const DATA = 0 << 2;
-        const READ = 0 << 3;
+        const READ = 0b0000_0000;
+        const WRITE = 0b0001_0000;
+        const SHARED_FOREIGN = 0b0010_0000;
+        const SHARED_OWNED = 0b0011_0000;
     }
 }
 
@@ -142,13 +141,15 @@ pub struct LayoutTableEntry(u64);
 /// The layout table entry is 64 bits wide, so we can use the first 63 bits for the size
 /// 0: Present bit - if set, the entry is valid
 /// 1: 0 -> User; 1 -> System structures
-/// 2: 0 -> Data; 1 -> Code/Executable
-/// 3: If Section is Data:
-///     1 -> Write
-///     0 -> Read
-///    Else:
-///     Unused
-/// 4: Stack
+/// 2: Stack
+/// 3: 0 -> Data; 1 -> Code/Executable
+/// 4-5:
+///     If Section is Data:
+///         00 -> Read
+///         01 -> Write
+///         10 -> Shared Foreign
+///         11 -> Shared Owned
+///     Else: Unsued
 /// 8-24: multiplicator of pages
 /// 24-63: starting address
 impl LayoutTableEntry {
@@ -182,7 +183,7 @@ impl LayoutTableEntry {
     }
 
     /// Creates a new empty layoutTableEntry
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         LayoutTableEntry(0)
     }
 
@@ -192,13 +193,13 @@ impl LayoutTableEntry {
         self.set_flags(flags)
     }
 
-    pub fn set_flags(&mut self, flags: Flags) -> &mut Self {
+    pub const fn set_flags(&mut self, flags: Flags) -> &mut Self {
         self.0 &= !Self::MASK_RETRIEVE_FLAGS;
         self.0 |= flags.bits() as u64;
         self
     }
 
-    pub fn set_len(&mut self, size: u32) -> &mut Self {
+    pub const fn set_len(&mut self, size: u32) -> &mut Self {
         self.0 &= !Self::MASK_RETRIEVE_SIZE;
         self.0 |= (size as u64) << 8;
         self
@@ -215,22 +216,22 @@ impl LayoutTableEntry {
     }
 
     /// Checks if the entry is present
-    pub fn is_present(&self) -> bool {
+    pub const fn is_present(&self) -> bool {
         self.flags().contains(Flags::PRESENT)
     }
 
-    pub fn flags(&self) -> Flags {
+    pub const fn flags(&self) -> Flags {
         let f = self.0 & Self::MASK_RETRIEVE_FLAGS;
         Flags::from_bits_truncate(f as u8)
     }
 
     /// Gets the number of pages included in the entry
-    pub fn len(&self) -> u32 {
+    pub const fn len(&self) -> u32 {
         ((self.0 & Self::MASK_RETRIEVE_SIZE) >> 8) as u32
     }
 
     /// Returns the size of the entry in bytes
-    pub fn size(&self) -> u64 {
+    pub const fn size(&self) -> u64 {
         self.len() as u64 * DefaultAlign::ALIGNMENT
     }
 
@@ -240,7 +241,7 @@ impl LayoutTableEntry {
     }
 
     /// Returns the address as is
-    pub fn addr_raw(&self) -> u64 {
+    pub const fn addr_raw(&self) -> u64 {
         (self.0 & Self::MASK_RETRIEVE_ADDR) >> 16
     }
 
@@ -271,16 +272,26 @@ impl Display for LayoutTableEntry {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         let addr = self.addr_raw() as usize;
         let size = self.len() as usize;
-        let stack = self.flags().contains(Flags::STACK);
-        let write = self.flags().contains(Flags::WRITE);
-        let code = self.flags().contains(Flags::CODE);
         let system = self.flags().contains(Flags::SYSTEM);
         let present = self.flags().contains(Flags::PRESENT);
 
+        let usage = match () {
+            _ if self.flags().contains(Flags::STACK) => "STACK",
+            _ if self.flags().contains(Flags::CODE) => "CODE",
+            _ if self.flags().contains(Flags::DATA) => match () {
+                _ if self.flags().contains(Flags::READ) => "DATA - READ",
+                _ if self.flags().contains(Flags::WRITE) => "DATA - WRITE",
+                _ if self.flags().contains(Flags::SHARED_OWNED) => "DATA - SHARED OWNED",
+                _ if self.flags().contains(Flags::SHARED_FOREIGN) => "DATA - SHARED FOREIGN",
+                _ => "DATA - UNKNOWN",
+            },
+            _ => "",
+        };
+
         write!(
             f,
-            "Addr: {:#x} Size: {} Stack: {} Write: {} Code: {} System: {} Present: {}",
-            addr, size, stack, write, code, system, present,
+            "Present: {} Addr: {:#x} Size: {} System: {} USAGE: {} ",
+            present, addr, size, system, usage,
         )
     }
 }
@@ -318,7 +329,21 @@ mod test {
             .set_len(0xabcde)
             .set_flags(Flags::CODE | Flags::PRESENT)
             .set_addr(PhysAddr::new_unchecked(0x0000123456789000)); // check for correct truncation
-        assert_eq!(0x123456789abcde05, entry.0, "got {:x}", entry.0);
+        assert_eq!(0x123456789abcde09, entry.0, "got {:x}", entry.0);
+    }
+
+    #[test]
+    fn flag_build() {
+        assert_eq!(Flags::empty().bits(), 0);
+        assert_eq!(
+            (Flags::PRESENT | Flags::DATA | Flags::SHARED_FOREIGN).bits(),
+            0b0010_0001
+        );
+        assert!((Flags::PRESENT | Flags::DATA | Flags::SHARED_FOREIGN).contains(Flags::DATA));
+        assert!(
+            (Flags::PRESENT | Flags::DATA | Flags::SHARED_FOREIGN).contains(Flags::SHARED_FOREIGN)
+        );
+        assert!((Flags::PRESENT | Flags::DATA | Flags::READ).contains(Flags::READ));
     }
 
     #[test]
@@ -330,13 +355,5 @@ mod test {
         }
 
         assert_eq!(5, layout.len_present())
-    }
-
-    #[test]
-    fn contains_vs_intersects() {
-        let base = Flags::PRESENT | Flags::SYSTEM;
-
-        assert!(base.contains(Flags::SYSTEM));
-        assert!(base.intersects(Flags::SYSTEM));
     }
 }

@@ -35,6 +35,11 @@ pub(crate) fn write(port: u16, value: u8) {
     }
 }
 
+/*
+ TODO:
+    * Initialize Allocators (foreign and owned)
+*/
+
 /// Parse the memory info structure and initialize the paging system etc.
 #[inline(always)]
 pub fn setup() -> Result<(), ExitCode> {

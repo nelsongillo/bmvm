@@ -3,12 +3,14 @@ mod setup;
 mod vcpu;
 mod vm;
 
-use crate::GUEST_DEFAULT_STACK_SIZE;
+use crate::{DEFAULT_SHARED_GUEST, DEFAULT_SHARED_HOST, GUEST_DEFAULT_STACK_SIZE};
 use bmvm_common::mem::AlignedNonZeroUsize;
 pub use vm::*;
 
 pub struct Config {
     stack_size: AlignedNonZeroUsize,
+    shared_guest: AlignedNonZeroUsize,
+    shared_host: AlignedNonZeroUsize,
     max_memory: u64,
     debug: bool,
 }
@@ -17,6 +19,8 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             stack_size: AlignedNonZeroUsize::new_ceil(GUEST_DEFAULT_STACK_SIZE).unwrap(),
+            shared_guest: AlignedNonZeroUsize::new_ceil(DEFAULT_SHARED_GUEST).unwrap(),
+            shared_host: AlignedNonZeroUsize::new_ceil(DEFAULT_SHARED_HOST).unwrap(),
             max_memory: 128 * 1024 * 1024, // 128MiB
             debug: false,
         }

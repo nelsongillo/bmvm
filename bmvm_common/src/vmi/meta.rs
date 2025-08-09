@@ -2,6 +2,7 @@ use crate::vmi::{Function, Signature};
 use core::array::TryFromSliceError;
 use core::cmp::Ordering;
 use std::ffi::{CStr, CString, FromVecWithNulError, NulError};
+use std::num::NonZeroU64;
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -11,6 +12,8 @@ pub enum Error {
     TooShort { expected: usize, actual: usize },
     #[error("parsed signature is zero")]
     ZeroSignature,
+    #[error("parsed function pointer is zero")]
+    ZeroFuncPtr,
     #[error("empty function name")]
     EmptyFunctionName,
     #[error("empty parameter type")]
@@ -43,11 +46,26 @@ fn read_cstring(input: &[u8]) -> Result<(CString, usize)> {
 
 #[repr(transparent)]
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Ord, PartialOrd)]
-pub struct FnPtr(u64);
+pub struct FnPtr(NonZeroU64);
 
 impl FnPtr {
     fn as_bytes(&self) -> [u8; size_of::<u64>()] {
-        self.0.to_le_bytes()
+        self.0.get().to_ne_bytes()
+    }
+
+    pub fn as_u64(&self) -> u64 {
+        self.0.get()
+    }
+
+    pub fn from_u64(u: u64) -> Result<Self> {
+        match NonZeroU64::new(u) {
+            Some(n) => Ok(Self(n)),
+            None => Err(Error::ZeroFuncPtr),
+        }
+    }
+
+    pub unsafe fn from_u64_unchecked(u: u64) -> Self {
+        Self(unsafe { NonZeroU64::new_unchecked(u) })
     }
 }
 
@@ -55,14 +73,8 @@ impl FnPtr {
 impl From<Function> for FnPtr {
     fn from(f: Function) -> Self {
         Self {
-            0: f as *const () as u64,
+            0: NonZeroU64::new(f as *const () as u64).unwrap(),
         }
-    }
-}
-
-impl From<u64> for FnPtr {
-    fn from(v: u64) -> Self {
-        Self { 0: v }
     }
 }
 
@@ -102,7 +114,7 @@ impl UpcallFn {
         let sig: Signature = read_u64(&buf[offset..])?;
         offset += size_of::<Signature>();
 
-        let func: FnPtr = FnPtr::from(read_u64(&buf[offset..])?);
+        let func: FnPtr = FnPtr::from_u64(read_u64(&buf[offset..])?)?;
         offset += size_of::<FnPtr>();
 
         Ok((Self { sig, func }, offset))

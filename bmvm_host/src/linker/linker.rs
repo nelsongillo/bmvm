@@ -7,6 +7,8 @@ use bmvm_common::vmi::{FnCall, FnPtr, ForeignShareable, Signature, UpcallFn};
 use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, CString};
 use std::fmt::{Display, Formatter};
+use std::hash::Hash;
+use std::num::{NonZeroU64, NonZeroUsize};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -241,10 +243,24 @@ impl Linker {
     /// - `Ok(())` if all links are valid.
     /// - `Err(Error)` if a single error occurred
     /// - `Err(Error::Joined)` if multiple errors occurred
-    fn link_upcall(&self, bundle: &ExecBundle) -> Result<()> {
-        // TODO: set the ptr in the upcall::Function struct
+    fn link_upcall(&mut self, bundle: &ExecBundle) -> Result<()> {
         let result = ValidationResults::new(&self.upcalls, &bundle.expose, |f| &f.base);
-        result.into_error((), CallDirection::HostToGuest, self.cfg.error_unused_guest)
+        let _ = result.into_error((), CallDirection::HostToGuest, self.cfg.error_unused_guest)?;
+
+        // TODO: include in first pass
+        let mut errs = Vec::new();
+        let hashed_upcalls: HashMap<Signature, FnPtr> =
+            bundle.upcalls.iter().map(|f| (f.sig, f.func)).collect();
+        for upcall in &mut self.upcalls {
+            match hashed_upcalls.get(&upcall.base.sig) {
+                Some(ptr) => upcall.link(ptr.clone()),
+                None => errs.push(Error::MissingUpcallImpl {
+                    func: upcall.base.clone(),
+                }),
+            }
+        }
+
+        Error::with_errors((), errs)
     }
 
     /// Link the expected hypercalls by the guest actually provided implementations by the host.

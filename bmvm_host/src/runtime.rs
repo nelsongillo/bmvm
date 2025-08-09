@@ -52,7 +52,7 @@ impl Runtime {
     /// Setup the guest by loading the proxy OS and executing the guest setup code.
     pub fn setup(&mut self) -> Result<()> {
         self.vm.load_exec(&mut self.executable)?;
-        self.vm.run().map_err(Error::Vm)
+        self.vm.run::<()>().map_err(Error::Vm)
     }
 
     /// Try calling a function on the guest with the provided parameters.
@@ -62,7 +62,11 @@ impl Runtime {
         P: Params,
         R: ForeignShareable,
     {
-        self.vm.execute(func, params).map_err(Error::Upcall)
+        self.vm
+            .upcall_exec_setup::<P, R>(func, params)
+            .map_err(Error::Upcall)?;
+        self.vm.run::<R>()?;
+        self.vm.upcall_result::<R>().map_err(Error::Upcall)
     }
 }
 

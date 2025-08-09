@@ -33,6 +33,10 @@ pub use vm::{Config, ConfigBuilder};
 pub(crate) const GUEST_DEFAULT_STACK_SIZE: usize = 8 * 1024 * 1024;
 /// The temporary system region size (1MiB)
 pub(crate) const GUEST_TMP_SYSTEM_SIZE: u64 = 1 * 1024 * 1024;
+/// The default shared memory size owned by the guest (8MiB)
+pub(crate) const DEFAULT_SHARED_GUEST: usize = 8 * 1024 * 1024;
+/// The default shared memory size owned by the host (8MiB)
+pub(crate) const DEFAULT_SHARED_HOST: usize = 8 * 1024 * 1024;
 
 /// The beginning of the .text segment should be at least 0x400000. This is similar to the x86_64
 /// convention (https://refspecs.linuxfoundation.org/elf/x86_64-abi-0.99.pdf).

@@ -5,19 +5,18 @@ use crate::vm::vcpu::Vcpu;
 use crate::vm::{Config, registry, setup, vcpu};
 use crate::{GUEST_STACK_ADDR, GUEST_SYSTEM_ADDR, GUEST_TMP_SYSTEM_SIZE};
 use bmvm_common::error::ExitCode;
-use bmvm_common::hash::SignatureHasher;
 use bmvm_common::mem::{
     Align, AlignedNonZeroUsize, DefaultAddrSpace, DefaultAlign, Flags, LayoutTableEntry, PhysAddr,
-    VirtAddr, align_floor, virt_to_phys,
+    VirtAddr, align_floor, init as init_vmi_alloc, virt_to_phys,
 };
 use bmvm_common::registry::Params;
 use bmvm_common::vmi::{ForeignShareable, Transport};
 use bmvm_common::{
-    BMVM_MEM_LAYOUT_TABLE, BMVM_TMP_GDT, BMVM_TMP_IDT, BMVM_TMP_PAGING, BMVM_TMP_SYS,
+    BMVM_MEM_LAYOUT_TABLE, BMVM_TMP_GDT, BMVM_TMP_IDT, BMVM_TMP_PAGING, BMVM_TMP_SYS, mem,
     region_abs_offset,
 };
 use bmvm_common::{HYPERCALL_IO_PORT, TypeSignature};
-use kvm_bindings::KVM_API_VERSION;
+use kvm_bindings::{KVM_API_VERSION, kvm_debug_exit_arch};
 use kvm_ioctls::{Cap, Kvm, VcpuExit, VmFd};
 use std::io::Write;
 
@@ -42,17 +41,36 @@ pub enum Error {
     #[error("Error during hypercall execution: {0}")]
     HypercallError(registry::Error),
     #[error("Error during upcall execution: {0}")]
-    UpcallError(registry::Error),
-    #[error("VCPU error: {0:?}")]
+    UpcallInitError(registry::Error),
+    #[error("Error during upcall preparation: {0}")]
+    UpcallExecError(mem::Error),
+    #[error("Error during upcall return: {0}")]
+    UpcallReturnError(ExitCode),
+    #[error("Guest unexpectedly return with upcall state, without previous upcall call")]
+    UnexpectedUpcallReturn,
+    #[error("VCPU error: {0}")]
     Vcpu(#[from] vcpu::Error),
-    #[error("Setup error: {0:?}")]
+    #[error("Setup error: {0}")]
     Setup(#[from] setup::Error),
-    #[error("Allocator error: {0:?}")]
+    #[error("Allocator error: {0}")]
     Allocator(#[from] crate::alloc::Error),
+    #[error("Unexpected exit reason: See logs for details")]
+    UnexpectedExit,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+enum State {
+    PreSetup,
+    Ready,
+    Executing,
+    UpcallExec,
+    HypercallExec,
+    Shutdown,
 }
 
 pub struct Vm {
     cfg: Config,
+    state: State,
     kvm: Kvm,
     vm: VmFd,
     vcpu: Vcpu,
@@ -87,6 +105,7 @@ impl Vm {
 
         Ok(Self {
             cfg: cfg.into(),
+            state: State::PreSetup,
             kvm,
             vm,
             vcpu,
@@ -97,18 +116,25 @@ impl Vm {
         })
     }
 
-    /// Pass the Host provided VMI function to the VM structure
-    pub(crate) fn link(&mut self, hypercalls: Hypercalls, upcalls: Upcalls) {
-        self.hypercalls = hypercalls;
-        self.upcalls = upcalls;
-    }
-
     /// load the guest executable
     pub(crate) fn load_exec(&mut self, exec: &mut ExecBundle) -> Result<()> {
         // allocate a stack region
         let (stack, stack_entry) = self.alloc_stack(self.cfg.stack_size, GUEST_STACK_ADDR())?;
         self.mem_mappings.push(stack);
         exec.layout.push(stack_entry);
+
+        // allocate shared memory managed by the guest and host
+        let (shared_guest, shared_guest_entry) = self.alloc_shared_guest()?;
+        let (shared_host, shared_host_entry) = self.alloc_shared_host()?;
+        // initialize the respective allocators
+        let owned = shared_host.as_arena();
+        let foreign = shared_guest.as_arena();
+        init_vmi_alloc(owned, foreign);
+        // include in the execution bundle
+        self.mem_mappings.push(shared_guest);
+        self.mem_mappings.push(shared_host);
+        exec.layout.push(shared_guest_entry);
+        exec.layout.push(shared_host_entry);
 
         // allocate sys region
         let (sys, sys_entry) = self.alloc_sys(exec)?;
@@ -137,109 +163,88 @@ impl Vm {
         Ok(())
     }
 
-    /// run the guest
-    pub(crate) fn run(&mut self) -> Result<()> {
-        log::info!("Running VM");
-        let mut buf_1 = Vec::with_capacity(8);
-        let mut buf_2 = Vec::with_capacity(8);
-
-        loop {
-            match self.vcpu.run()? {
-                VcpuExit::IoOut(port, data) => match port {
-                    1 => {
-                        buf_2.clear();
-                        if data.len() == 1 {
-                            buf_1.push(data[0]);
-                        } else {
-                            buf_1.clear();
-                        }
-
-                        if buf_1.len() == 8 {
-                            let mut vbuf = [0u8; 8];
-                            vbuf.copy_from_slice(buf_1.as_slice());
-                            let v = u64::from_le_bytes(vbuf);
-                            log::info!("LayoutTableEntry: {}", LayoutTableEntry::from(v));
-                            buf_1.clear();
-                        }
-                    }
-                    2 => {
-                        buf_1.clear();
-                        if data.len() == 1 {
-                            buf_2.push(data[0]);
-                        } else {
-                            buf_2.clear();
-                        }
-
-                        if buf_2.len() == 8 {
-                            let mut vbuf = [0u8; 8];
-                            vbuf.copy_from_slice(buf_2.as_slice());
-                            let v = u64::from_le_bytes(vbuf);
-                            log::info!("Address: {:#X}", v);
-                            buf_2.clear();
-                        }
-                    }
-                    HYPERCALL_IO_PORT => {
-                        log::debug!("HYPERCALL TRIGGER");
-                        let mut regs = self.vcpu.get_regs()?;
-                        let sig = regs.rbx;
-                        let transport = Transport::new(regs.r8, regs.r9);
-                        log::debug!("Parameter: signature={}, transport={}", sig, transport);
-                        let output = self
-                            .hypercalls
-                            .try_execute(sig, transport)
-                            .map_err(Error::HypercallError)?;
-                        regs.r8 = output.primary();
-                        regs.r9 = output.secondary();
-                        log::debug!("Result: transport={}", output);
-                        self.vcpu.set_regs(regs);
-                    }
-                    _ => {
-                        log::info!(
-                            "IO write on port {:#x} with data {:X?} -> {}",
-                            port,
-                            data,
-                            String::from_utf8_lossy(&data)
-                        )
-                    }
-                },
-                VcpuExit::IoIn(port, data) => {
-                    log::info!("IO read on port {:#x} with data {:#x}", port, data[0])
-                }
-                VcpuExit::Hlt => {
-                    log::info!("Halt called -> shutdown vm");
-                    let exit_code = ExitCode::from((self.vcpu.read_regs()?.rax & 0xFF) as u8);
-                    match exit_code {
-                        ExitCode::Normal => log::info!("Normal exit"),
-                        _ => log::error!("Exit Code: {:?}", exit_code),
-                    }
-                    self.react_to_exit_code(exit_code)?;
-                    break;
-                }
-                VcpuExit::Debug(_) => {
-                    let rip = self.vcpu.read_regs()?.rip;
-                    log::debug!("Debug called with RIP: {:#x}", rip);
-                    self.print_debug_info()?;
-                    self.vcpu.enable_single_step()?
-                }
-                reason => {
-                    log::error!("Unexpected exit reason: {:?}", reason);
-                    self.print_debug_info()?;
-                    self.dump_region(0x1000)?;
-                    break;
-                }
-            }
-        }
-
-        Ok(())
+    /// Pass the Host provided VMI function to the VM structure
+    pub(crate) fn link(&mut self, hypercalls: Hypercalls, upcalls: Upcalls) {
+        self.hypercalls = hypercalls;
+        self.upcalls = upcalls;
     }
 
     /// Expose the guest memory allocator used by this VM instance
     pub fn allocator(&self) -> &Allocator {
         &self.manager
     }
+}
 
-    /// Execute a Guest provided function
-    pub fn execute<P, R>(&self, func: &'static str, params: P) -> Result<R>
+// Implementation regarding the vm execution state
+impl Vm {
+    /// run the guest
+    pub(crate) fn run<R>(&mut self) -> Result<()>
+    where
+        R: ForeignShareable,
+    {
+        log::debug!("executing vm");
+        match self.vcpu.run()? {
+            // IO Out should only be triggered by the hypercall
+            // execute hypercall or log warning otherwise
+            VcpuExit::IoOut(port, data) => {
+                if port == HYPERCALL_IO_PORT {
+                    return self.hypercall_exec();
+                }
+
+                log::warn!(
+                    "Unexpected IO write on port {:#x} with data {:X?}",
+                    port,
+                    data,
+                );
+                Ok(())
+            }
+            // Check the exit code and react accordingly
+            VcpuExit::Hlt => {
+                let exit_code = ExitCode::from((self.vcpu.read_regs()?.rax & 0xFF) as u8);
+                match exit_code {
+                    ExitCode::Normal => {
+                        log::info!("normal exit, shutting down VM");
+                        self.state = State::Shutdown;
+                    }
+                    ExitCode::Ready => {
+                        log::info!("guest setup finished");
+                        self.state = State::Ready;
+                    }
+                    ExitCode::Return => {
+                        if self.state != State::UpcallExec {
+                            return Err(Error::UnexpectedUpcallReturn);
+                        }
+
+                        log::info!("guest returned from upcall");
+                        self.state = State::UpcallExec;
+                    }
+                    _ => log::error!("Exit Code: {:?}", exit_code),
+                }
+                self.react_to_exit_code(exit_code)?;
+
+                Ok(())
+            }
+            VcpuExit::Debug(debug) => {
+                let rip = self.vcpu.read_regs()?.rip;
+                log::debug!("Debug called at RIP: {:#x}", rip);
+                self.print_debug_info()?;
+                self.vcpu.enable_single_step().map_err(Error::Vcpu)
+            }
+            // Unexpected Exit
+            reason => {
+                log::error!("Unexpected exit reason: {:?}", reason);
+                &self.print_debug_info()?;
+                &self.dump_region(0x1000)?;
+                Err(Error::UnexpectedExit)
+            }
+        }
+    }
+}
+
+// Implementation regarding the guest-host interaction
+impl Vm {
+    /// Setup the guest environment to execute the upcall
+    pub fn upcall_exec_setup<P, R>(&mut self, func: &'static str, params: P) -> Result<()>
     where
         P: Params,
         R: ForeignShareable,
@@ -247,11 +252,68 @@ impl Vm {
         let func = self
             .upcalls
             .find_upcall::<P, R>(func)
-            .map_err(Error::UpcallError)?;
+            .map_err(Error::UpcallInitError)?;
 
-        todo!()
+        let transport = params.into_transport().map_err(Error::UpcallExecError)?;
+
+        self.vcpu.mutate_regs(|regs| {
+            // Set the parameters
+            regs.r8 = transport.primary();
+            regs.r9 = transport.secondary();
+
+            // Set the function pointer
+            regs.rip = func.ptr().unwrap().as_u64();
+            true
+        })?;
+
+        self.state = State::UpcallExec;
+        Ok(())
     }
 
+    /// Try reading the return value form the previously executed Upcall
+    pub fn upcall_result<R>(&mut self) -> Result<R>
+    where
+        R: ForeignShareable,
+    {
+        let regs = self.vcpu.read_regs()?;
+        let transport = Transport::new(regs.r8, regs.r9);
+        R::from_transport(transport).map_err(Error::UpcallReturnError)
+    }
+
+    fn hypercall_exec(&mut self) -> Result<()> {
+        log::debug!("HYPERCALL TRIGGER");
+
+        // save the current state and set the hypercall state
+        let prev = self.state;
+        self.state = State::HypercallExec;
+
+        // read hypercall parameters
+        let mut regs = self.vcpu.get_regs()?;
+        let sig = regs.rbx;
+        let transport = Transport::new(regs.r8, regs.r9);
+        log::debug!("Parameter: signature={}, transport={}", sig, transport);
+
+        // execute the hypercall
+        let output = self
+            .hypercalls
+            .try_execute(sig, transport)
+            .map_err(Error::HypercallError)?;
+
+        // write the result to the registers
+        regs.r8 = output.primary();
+        regs.r9 = output.secondary();
+        log::debug!("Result: transport={}", output);
+        self.vcpu.set_regs(regs);
+
+        // restore the previous state
+        self.state = prev;
+        Ok(())
+    }
+}
+
+// Implementation regarding initial setup
+impl Vm {
+    /// allocate memory for the stack
     fn alloc_stack(
         &mut self,
         capacity: AlignedNonZeroUsize,
@@ -276,7 +338,40 @@ impl Vm {
         Ok((stack, entry))
     }
 
-    // TODO: Move to GuestOnly regio
+    /// allocate shared memory managed by the guest
+    fn alloc_shared_guest(&mut self) -> Result<(Region<ReadWrite>, LayoutTableEntry)> {
+        let region = self
+            .manager
+            .alloc_accessible::<ReadWrite>(self.cfg.shared_guest)?
+            .set_guest_addr(GUEST_SYSTEM_ADDR());
+
+        let layout = LayoutTableEntry::new(
+            region.addr(),
+            self.cfg.shared_guest.get() as u32,
+            Flags::PRESENT | Flags::USER | Flags::DATA | Flags::SHARED_OWNED,
+        );
+
+        Ok((region, layout))
+    }
+
+    /// allocate shared memory managed by the host
+    fn alloc_shared_host(&mut self) -> Result<(Region<ReadWrite>, LayoutTableEntry)> {
+        let region = self
+            .manager
+            .alloc_accessible::<ReadWrite>(self.cfg.shared_host)?
+            .set_guest_addr(GUEST_SYSTEM_ADDR());
+
+        let layout = LayoutTableEntry::new(
+            region.addr(),
+            self.cfg.shared_guest.get() as u32,
+            Flags::PRESENT | Flags::USER | Flags::DATA | Flags::SHARED_FOREIGN,
+        );
+
+        Ok((region, layout))
+    }
+
+    // TODO: Move to GuestOnly regions
+    /// allocate memory for the system components
     fn alloc_sys(&mut self, exec: &ExecBundle) -> Result<(Region<ReadWrite>, LayoutTableEntry)> {
         let layout_sys = setup::estimate_sys_region(&exec.layout)?;
 
@@ -349,7 +444,11 @@ impl Vm {
 
         self.vcpu.setup(&setup).map_err(|e| Error::Vcpu(e))
     }
+}
 
+// Implementation regarding vm debugging
+impl Vm {
+    /// dump specific region based on exit code
     fn react_to_exit_code(&mut self, code: ExitCode) -> Result<()> {
         match code {
             ExitCode::InvalidMemoryLayoutTableTooSmall => self.dump_region(0x0),
@@ -359,6 +458,7 @@ impl Vm {
         }
     }
 
+    /// print the basic debug information: registers and optionally the page fault region
     fn print_debug_info(&mut self) -> Result<()> {
         let (regs, sregs) = self.vcpu.read_all_regs()?;
         log::debug!("RIP -> {:#x}", regs.rip);
@@ -377,10 +477,12 @@ impl Vm {
         Ok(())
     }
 
+    /// dump the region containing the address to console
     fn dump_region(&self, addr: u64) -> Result<()> {
         self.dump_region_to_file(addr, format!("dump_{:#x}.bin", addr))
     }
 
+    /// dump the region containing the address to file
     fn dump_region_to_file(&self, addr: u64, name: String) -> Result<()> {
         let paddr = virt_to_phys::<DefaultAddrSpace>(unsafe { VirtAddr::new_unsafe(addr) });
         if let Some(r) = self.mem_mappings.get(paddr) {
