@@ -2,7 +2,7 @@
 #![no_main]
 
 use bmvm_guest::{Foreign, SharedBuf, alloc_buf, expose};
-use bmvm_guest::{TypeSignature, entry, host};
+use bmvm_guest::{TypeSignature, host, setup};
 
 #[repr(transparent)]
 #[derive(TypeSignature)]
@@ -28,5 +28,5 @@ fn foo(a: u32, b: Foreign<Foo>) -> SharedBuf {
     buf.into_shared()
 }
 
-#[entry]
+#[setup]
 fn main() {}

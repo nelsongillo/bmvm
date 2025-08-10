@@ -22,21 +22,30 @@ pub use bmvm_common::vmi::{ForeignShareable, OwnedShareable, Signature, Transpor
 pub use bmvm_common::{HYPERCALL_IO_PORT, TypeSignature};
 
 // re-export: bmvm-macros
+use crate::panic::ready;
+use crate::setup::setup;
 pub use bmvm_macros::TypeSignature;
-pub use bmvm_macros::{entry, expose_guest as expose, host};
+pub use bmvm_macros::{expose_guest as expose, host};
+
+#[cfg(feature = "setup")]
+pub use bmvm_macros::setup;
 
 unsafe extern "C" {
-    fn __process_entry();
+    fn __environment_setup();
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
-    match setup::setup() {
-        Ok(_) => unsafe { __process_entry() },
-        Err(err) => exit_with_code(err),
+    if let Err(e) = setup() {
+        exit_with_code(e);
     }
 
-    halt()
+    #[cfg(feature = "setup")]
+    unsafe {
+        __environment_setup()
+    };
+
+    ready()
 }
 
 #[inline]

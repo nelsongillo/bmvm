@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bmvm-guest = {path = "../../bmvm_guest", features = ["vmi-no-debug"]}
+bmvm-guest = {path = "../../bmvm_guest", features = ["vmi-no-debug", "setup"]}
 
 [profile.dev]
 panic = "abort"

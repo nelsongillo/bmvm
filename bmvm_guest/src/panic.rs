@@ -31,6 +31,10 @@ pub fn halt() -> ! {
     exit_with_code(ExitCode::Normal);
 }
 
+pub fn ready() -> ! {
+    exit_with_code(ExitCode::Ready);
+}
+
 /// Write additional values to registers before VM exit.
 fn write_additional_values(code: &ExitCode) {
     unsafe {

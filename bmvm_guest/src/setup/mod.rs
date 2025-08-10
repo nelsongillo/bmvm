@@ -1,7 +1,7 @@
-use bmvm_common::BMVM_MEM_LAYOUT_TABLE;
 use bmvm_common::error::ExitCode;
 use bmvm_common::interprete::{Interpret, InterpretError};
-use bmvm_common::mem::{Align, Flags, LayoutTable, Page4KiB};
+use bmvm_common::mem::{Align, Arena, Flags, LayoutTable, Page4KiB};
+use bmvm_common::{BMVM_MEM_LAYOUT_TABLE, mem};
 use core::arch::asm;
 
 mod gdt;
@@ -35,11 +35,6 @@ pub(crate) fn write(port: u16, value: u8) {
     }
 }
 
-/*
- TODO:
-    * Initialize Allocators (foreign and owned)
-*/
-
 /// Parse the memory info structure and initialize the paging system etc.
 #[inline(always)]
 pub fn setup() -> Result<(), ExitCode> {
@@ -56,6 +51,24 @@ pub fn setup() -> Result<(), ExitCode> {
     let region_sys = table
         .into_iter()
         .find(|entry| entry.flags().contains(Flags::PRESENT | Flags::SYSTEM))
+        .ok_or(ExitCode::InvalidMemoryLayout)?;
+
+    let region_vmi_foreign = table
+        .into_iter()
+        .find(|entry| {
+            entry
+                .flags()
+                .contains(Flags::PRESENT | Flags::DATA | Flags::SHARED_FOREIGN)
+        })
+        .ok_or(ExitCode::InvalidMemoryLayout)?;
+
+    let region_vmi_owned = table
+        .into_iter()
+        .find(|entry| {
+            entry
+                .flags()
+                .contains(Flags::PRESENT | Flags::DATA | Flags::SHARED_OWNED)
+        })
         .ok_or(ExitCode::InvalidMemoryLayout)?;
 
     // stage 2 -> Layout parsed
@@ -78,6 +91,11 @@ pub fn setup() -> Result<(), ExitCode> {
 
     // stage 5 -> Paging Done
     write(IO_PORT, 4);
+
+    // set up the allocator for the VMI
+    let foreign = Arena::from(region_vmi_foreign);
+    let owned = Arena::from(region_vmi_owned);
+    mem::init(owned, foreign);
 
     Ok(())
 }

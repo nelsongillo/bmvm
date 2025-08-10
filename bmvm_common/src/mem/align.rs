@@ -150,13 +150,20 @@ macro_rules! impl_aligned_non_zero {
                 }
             }
 
+            pub const fn new_aligned_unchecked(value: $nonzero) -> Self {
+                Self {
+                    inner: value,
+                    _alignment: PhantomData,
+                }
+            }
+
             /// Returns the inner value
-            pub fn get(&self) -> $int {
+            pub const fn get(&self) -> $int {
                 self.inner.get()
             }
 
             /// Returns the raw NonZero value
-            pub fn get_non_zero(self) -> $nonzero {
+            pub const fn get_non_zero(self) -> $nonzero {
                 self.inner
             }
         }

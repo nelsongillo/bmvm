@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
+setup = []
 vmi-debug = ["bmvm-macros/vmi-debug", "bmvm-common/vmi-debug"]
 vmi-no-debug = ["bmvm-macros/vmi-no-debug", "bmvm-common/vmi-no-debug"]
 

@@ -1,8 +1,10 @@
 use crate::interprete::{Interpret, Zero};
-use crate::mem::{Align, DefaultAlign, PhysAddr};
+use crate::mem::{Align, AlignedNonZeroUsize, Arena, DefaultAlign, PhysAddr};
 use bitflags::bitflags;
 #[cfg(feature = "vmi-consume")]
 use core::fmt::{Display, Formatter};
+use std::num::NonZeroUsize;
+use std::ptr::NonNull;
 use x86_64::structures::paging::PageTableFlags;
 
 pub const MAX_REGION_SIZE: u64 = u16::MAX as u64 * DefaultAlign::ALIGNMENT;
@@ -230,7 +232,7 @@ impl LayoutTableEntry {
         ((self.0 & Self::MASK_RETRIEVE_SIZE) >> 8) as u32
     }
 
-    /// Returns the size of the entry in bytes
+    /// Returns the size of the entry in bytes. The size is page-aligned.
     pub const fn size(&self) -> u64 {
         self.len() as u64 * DefaultAlign::ALIGNMENT
     }
@@ -264,6 +266,18 @@ impl LayoutTableEntry {
 impl From<u64> for LayoutTableEntry {
     fn from(value: u64) -> Self {
         LayoutTableEntry(value)
+    }
+}
+
+impl From<LayoutTableEntry> for Arena {
+    fn from(entry: LayoutTableEntry) -> Self {
+        unsafe {
+            let ptr = NonNull::new_unchecked(entry.addr().as_mut_ptr::<u8>());
+            let size = NonZeroUsize::new(entry.size() as usize).unwrap();
+            let capacity = AlignedNonZeroUsize::new_aligned_unchecked(size);
+
+            Arena { ptr, capacity }
+        }
     }
 }
 
