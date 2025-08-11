@@ -1,0 +1,12 @@
+[package]
+name = "vmi-inspect"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bmvm-common = {path = "../../bmvm_common", features = ["vmi-consume"]}
+clap = { version = "4.5.40", features = ["derive", "env"] }
+anyhow = "1.0.98"
+goblin = "0.10.0"
+log = "0.4.27"
+tabled = "0.20.0"
