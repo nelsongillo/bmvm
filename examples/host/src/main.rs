@@ -1,4 +1,7 @@
-use bmvm_host::{ConfigBuilder, Runtime, RuntimeBuilder, linker};
+use bmvm_host::{
+    ConfigBuilder, Foreign, ForeignBuf, RuntimeBuilder, Shared, SharedBuf, TypeSignature, alloc,
+    expose, linker,
+};
 use clap::Parser;
 
 const ENV_GUEST: &str = "GUEST";
@@ -12,6 +15,27 @@ struct Args {
 
     #[arg(short, long, env = ENV_DEBUG, default_value_t = false)]
     debug: bool,
+}
+
+#[repr(transparent)]
+#[derive(TypeSignature)]
+struct Foo(Bar);
+
+#[repr(C)]
+#[derive(TypeSignature)]
+struct Bar {
+    a: u32,
+    b: u32,
+}
+
+#[expose]
+extern "C" fn x(_a: Foo, _b: i32) -> Shared<Bar> {
+    let mut owned = unsafe { alloc::<Bar>().unwrap() };
+    let bar = owned.as_mut();
+    bar.a = 13;
+    bar.b = 12;
+
+    owned.into_shared()
 }
 
 fn main() -> anyhow::Result<()> {

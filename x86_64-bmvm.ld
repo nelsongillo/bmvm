@@ -35,18 +35,18 @@ SECTIONS
         KEEP(*(.bmvm.vmi.debug));
     }
 
-
-    .bmvm.vmi.expose : {
+    /* TODO: specify PH_NOTE */
+    .bmvm.vmi.expose (NOLOAD) : {
         KEEP(*(.bmvm.vmi.expose));
     }
 
-    .bmvm.vmi.expose.calls : {
-        __start_bmvm_vmi_upcalls = .;
-        KEEP(*(SORT_BY_NAME(.bmvm.vmi.expose.calls.*)));
-        __stop_bmvm_vmi_upcalls = .;
+    /* TODO: specify PH_NOTE */
+    .bmvm.vmi.expose.calls (NOLOAD) : {
+        KEEP(*(.bmvm.vmi.expose.calls));
     }
 
-    .bmvm.vmi.host : {
+    /* TODO: specify PH_NOTE */
+    .bmvm.vmi.host (NOLOAD) : {
         KEEP(*(.bmvm.vmi.host));
     }
 }

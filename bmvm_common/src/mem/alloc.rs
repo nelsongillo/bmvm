@@ -11,6 +11,9 @@ use talc::{ErrOnOom, Span, Talc};
 static ALLOC_FOREIGN: Once<AllocImpl<spin::Mutex<()>, ErrOnOom>> = Once::new();
 static ALLOC_OWN: Once<AllocImpl<spin::Mutex<()>, ErrOnOom>> = Once::new();
 
+const SHAREABLE_T: &[u8] = b"Shareable<T>";
+const SHAREABLE_BUF: &[u8] = b"ShareableBuf";
+
 #[cfg_attr(
     feature = "vmi-consume",
     derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)
@@ -336,7 +339,7 @@ impl<T: TypeSignature> TypeSignature for Shared<T> {
     const SIGNATURE: u64 = {
         let mut h = crate::hash::SignatureHasher::new();
         h.write(0u64.to_le_bytes().as_slice());
-        h.write(b"Shared");
+        h.write(SHAREABLE_T);
         h.write(<T as TypeSignature>::SIGNATURE.to_le_bytes().as_slice());
         h.finish()
     };
@@ -407,7 +410,7 @@ impl TypeSignature for SharedBuf {
     const SIGNATURE: u64 = {
         let mut h = crate::hash::SignatureHasher::new();
         h.write(0u64.to_le_bytes().as_slice());
-        h.write(b"SharedBuf");
+        h.write(SHAREABLE_BUF);
         h.write(
             <OffsetPtr<u8> as TypeSignature>::SIGNATURE
                 .to_le_bytes()
@@ -478,32 +481,14 @@ impl<T: TypeSignature> TypeSignature for Foreign<T> {
     const SIGNATURE: u64 = {
         let mut h = crate::hash::SignatureHasher::new();
         h.write(0u64.to_le_bytes().as_slice());
-        h.write(b"Foreign");
-        h.write(
-            <OffsetPtr<T> as TypeSignature>::SIGNATURE
-                .to_le_bytes()
-                .as_slice(),
-        );
+        h.write(SHAREABLE_T);
+        h.write(<T as TypeSignature>::SIGNATURE.to_le_bytes().as_slice());
         h.finish()
     };
     const IS_PRIMITIVE: bool = false;
     #[cfg(feature = "vmi-consume")]
     fn name() -> String {
         String::from(format!("Foreign<{}>", T::name()))
-    }
-}
-
-impl<T: TypeSignature> TypeSignature for &Foreign<T> {
-    const SIGNATURE: u64 = {
-        let mut h = crate::hash::SignatureHasher::from_partial(Foreign::<T>::SIGNATURE);
-        h.write(b"&Foreign");
-        h.finish()
-    };
-    const IS_PRIMITIVE: bool = false;
-
-    #[cfg(feature = "vmi-consume")]
-    fn name() -> String {
-        String::from(format!("&Foreign<{}>", T::name()))
     }
 }
 
@@ -534,7 +519,7 @@ impl TypeSignature for ForeignBuf {
     const SIGNATURE: u64 = {
         let mut h = crate::hash::SignatureHasher::new();
         h.write(0u64.to_le_bytes().as_slice());
-        h.write(b"ForeignBuf");
+        h.write(SHAREABLE_BUF);
         h.write(
             <OffsetPtr<u8> as TypeSignature>::SIGNATURE
                 .to_le_bytes()

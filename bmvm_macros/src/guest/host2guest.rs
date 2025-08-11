@@ -38,7 +38,6 @@ pub fn expose_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
         return fn_call.err().unwrap().to_compile_error().into();
     }
     let (fn_call, params, return_type) = fn_call.unwrap();
-    let upcall_sig = fn_call.signature();
 
     // generate call meta static data
     let callmeta = match gen_callmeta(
@@ -76,12 +75,11 @@ pub fn expose_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // function wrapper generation
     let wrapper = gen_wrapper(&mother, fn_name, &wrapper_fn_name, &param_type);
-    // section name for sorting upcalls via the linker
-    let sort_section_name = format!("{}.{:016x}", BMVM_META_SECTION_EXPOSE_CALLS, upcall_sig);
     // optionally indicate debug information in the metadata
     let debug = gen_call_meta_debug();
     // TokenStream containing static defs for FnCall etc
     let meta = callmeta.token;
+    let upcall_sig = callmeta.sig;
 
     // Generate the final token stream
     quote! {
@@ -93,7 +91,7 @@ pub fn expose_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
         #[used]
         #[allow(non_upper_case_globals)]
-        #[unsafe(link_section = #sort_section_name)]
+        #[unsafe(link_section = #BMVM_META_SECTION_EXPOSE_CALLS)]
         static #static_upcall: #mother::UpcallFn = #mother::UpcallFn {
             sig: #upcall_sig,
             func: #wrapper_fn_name,

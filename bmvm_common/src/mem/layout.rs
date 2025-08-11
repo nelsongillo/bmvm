@@ -3,8 +3,8 @@ use crate::mem::{Align, AlignedNonZeroUsize, Arena, DefaultAlign, PhysAddr};
 use bitflags::bitflags;
 #[cfg(feature = "vmi-consume")]
 use core::fmt::{Display, Formatter};
-use std::num::NonZeroUsize;
-use std::ptr::NonNull;
+use core::num::NonZeroUsize;
+use core::ptr::NonNull;
 use x86_64::structures::paging::PageTableFlags;
 
 pub const MAX_REGION_SIZE: u64 = u16::MAX as u64 * DefaultAlign::ALIGNMENT;

@@ -10,4 +10,5 @@ members = [
     "examples/host-expand",
     "examples/longmode",
     "tooling/printlayout",
+    "tooling/vmi-inspect",
 ]

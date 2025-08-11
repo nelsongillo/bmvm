@@ -345,9 +345,10 @@ impl Vm {
             .alloc_accessible::<ReadWrite>(self.cfg.shared_guest)?
             .set_guest_addr(GUEST_SYSTEM_ADDR());
 
+        let size = (self.cfg.shared_guest.get() as u64 / DefaultAlign::ALIGNMENT) as u32;
         let layout = LayoutTableEntry::new(
             region.addr(),
-            self.cfg.shared_guest.get() as u32,
+            size,
             Flags::PRESENT | Flags::USER | Flags::DATA | Flags::SHARED_OWNED,
         );
 
@@ -361,16 +362,17 @@ impl Vm {
             .alloc_accessible::<ReadWrite>(self.cfg.shared_host)?
             .set_guest_addr(GUEST_SYSTEM_ADDR());
 
+        let size = (self.cfg.shared_host.get() as u64 / DefaultAlign::ALIGNMENT) as u32;
         let layout = LayoutTableEntry::new(
             region.addr(),
-            self.cfg.shared_guest.get() as u32,
+            size,
             Flags::PRESENT | Flags::USER | Flags::DATA | Flags::SHARED_FOREIGN,
         );
 
         Ok((region, layout))
     }
 
-    // TODO: Move to GuestOnly regions
+    // TODO: Move to GuestOnly regions (if possible, wait for kernel upgrade)
     /// allocate memory for the system components
     fn alloc_sys(&mut self, exec: &ExecBundle) -> Result<(Region<ReadWrite>, LayoutTableEntry)> {
         let layout_sys = setup::estimate_sys_region(&exec.layout)?;
