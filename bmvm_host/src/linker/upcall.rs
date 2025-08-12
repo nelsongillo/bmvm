@@ -2,9 +2,8 @@ use crate::linker::{Func, compute_signature};
 use bmvm_common::TypeSignature;
 use bmvm_common::registry::Params;
 use bmvm_common::vmi::{FnPtr, ForeignShareable};
-use std::num::NonZeroU64;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Function {
     pub(crate) base: Func,
     pub(super) ptr: Option<FnPtr>,

@@ -1,8 +1,6 @@
 use crate::interprete::{Interpret, Zero};
 use crate::mem::{Align, AlignedNonZeroUsize, Arena, DefaultAlign, PhysAddr};
 use bitflags::bitflags;
-#[cfg(feature = "vmi-consume")]
-use core::fmt::{Display, Formatter};
 use core::num::NonZeroUsize;
 use core::ptr::NonNull;
 use x86_64::structures::paging::PageTableFlags;
@@ -89,26 +87,6 @@ impl Iterator for LayoutTableIter<'_> {
     }
 }
 
-bitflags! {
-    #[derive(Copy, Clone, PartialEq, Eq)]
-    pub struct Flags: u8 {
-        /// Indicates the entrys presence.
-        const PRESENT = 0b0000_0001;
-        ///  0 -> User; 1 -> System structures
-        const USER = 0b0000_0000;
-        const SYSTEM = 0b0000_0010;
-        const STACK = 0b0000_0100;
-        /// 0 -> Data; 1 -> Code/Executable
-        const CODE = 0b0000_1000;
-        const DATA = 0b0000_0000;
-        /// 0 -> Read; 1 -> Write
-        const READ = 0b0000_0000;
-        const WRITE = 0b0001_0000;
-        const SHARED_FOREIGN = 0b0010_0000;
-        const SHARED_OWNED = 0b0011_0000;
-    }
-}
-
 impl<'a> IntoIterator for &'a LayoutTable {
     type Item = LayoutTableEntry;
     type IntoIter = LayoutTableIter<'a>;
@@ -118,7 +96,124 @@ impl<'a> IntoIterator for &'a LayoutTable {
     }
 }
 
+bitflags! {
+    /// Memory entry flags with precise bit layout
+    ///
+    /// Bit layout:
+    /// - 0: Present bit - if set, the entry is valid
+    /// - 1: 0 -> User; 1 -> System structures
+    /// - 2: Stack
+    /// - 3: 0 -> Data; 1 -> Code/Executable
+    /// - 4-5:
+    ///     If Section is Data:
+    ///         00 -> Read
+    ///         01 -> Write
+    ///         10 -> Shared Foreign
+    ///         11 -> Shared Owned
+    ///     Else: Unused
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct Flags: u8 {
+        /// Present bit - if set, the entry is valid
+        const PRESENT = 1 << 0;
+        /// System structures (when set), User (when not set)
+        const SYSTEM = 1 << 1;
+        /// Stack flag
+        const STACK = 1 << 2;
+        /// Code/Executable (when set), Data (when not set)
+        const CODE = 1 << 3;
+
+        // Data-specific access flags (bits 4-5)
+        const DATA_READ = 0b00 << 4;
+        const DATA_WRITE = 0b01 << 4;
+        const DATA_SHARED_FOREIGN = 0b10 << 4;
+        const DATA_SHARED_OWNED = 0b11 << 4;
+
+        // Mask for data access bits
+        const DATA_ACCESS_MASK = 0b11 << 4;
+    }
+}
+
 impl Flags {
+    /// Create new flags with all bits cleared
+    pub fn new() -> Self {
+        Flags::empty()
+    }
+
+    /// Check if this is a valid (present) entry
+    pub fn is_present(&self) -> bool {
+        self.contains(Flags::PRESENT)
+    }
+
+    /// Set the present bit
+    pub fn set_present(&mut self, present: bool) {
+        self.set(Flags::PRESENT, present);
+    }
+
+    /// Check if this is a system entry
+    pub fn is_system(&self) -> bool {
+        self.contains(Flags::SYSTEM)
+    }
+
+    /// Set system/user flag
+    pub fn set_system(&mut self, system: bool) {
+        self.set(Flags::SYSTEM, system);
+    }
+
+    /// Check if this is a stack entry
+    pub fn is_stack(&self) -> bool {
+        self.contains(Flags::STACK)
+    }
+
+    /// Set stack flag
+    pub fn set_stack(&mut self, stack: bool) {
+        self.set(Flags::STACK, stack);
+    }
+
+    /// Check if this is code (executable)
+    pub fn is_code(&self) -> bool {
+        self.contains(Flags::CODE)
+    }
+
+    /// Set code/data flag
+    pub fn set_code(&mut self, code: bool) {
+        self.set(Flags::CODE, code);
+    }
+
+    /// Get the data access mode (only valid when !is_code())
+    pub fn data_access_mode(&self) -> Option<DataAccessMode> {
+        if self.is_code() {
+            return None;
+        }
+
+        match self.bits() >> 4 & 0b11 {
+            0b00 => Some(DataAccessMode::Read),
+            0b01 => Some(DataAccessMode::Write),
+            0b10 => Some(DataAccessMode::SharedForeign),
+            0b11 => Some(DataAccessMode::SharedOwned),
+            _ => unreachable!(), // We've masked to 2 bits, so only 0-3 possible
+        }
+    }
+
+    /// Set the data access mode (only valid when !is_code())
+    pub fn set_data_access_mode(&mut self, mode: DataAccessMode) -> Result<(), &'static str> {
+        if self.is_code() {
+            return Err("Cannot set data access mode on code section");
+        }
+
+        // Clear the existing bits
+        self.remove(Flags::DATA_ACCESS_MASK);
+
+        // Set the new bits
+        *self |= match mode {
+            DataAccessMode::Read => Flags::DATA_READ,
+            DataAccessMode::Write => Flags::DATA_WRITE,
+            DataAccessMode::SharedForeign => Flags::DATA_SHARED_FOREIGN,
+            DataAccessMode::SharedOwned => Flags::DATA_SHARED_OWNED,
+        };
+
+        Ok(())
+    }
+
     /// Converts the flags to their `PageTableFlags` representation.
     /// Note: The present flag will not be set by this method.
     pub fn to_page_table_flags(self) -> PageTableFlags {
@@ -127,7 +222,7 @@ impl Flags {
         // If the entry indicates that the page is a data page, check writeable
         if !self.contains(Flags::CODE) {
             pt_flags |= PageTableFlags::NO_EXECUTE;
-            if self.contains(Flags::WRITE) {
+            if self.contains(Flags::DATA_WRITE) {
                 pt_flags |= PageTableFlags::WRITABLE;
             }
         }
@@ -135,6 +230,29 @@ impl Flags {
         pt_flags
     }
 }
+
+/// Data access modes (only valid for data sections)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataAccessMode {
+    Read,
+    Write,
+    SharedForeign,
+    SharedOwned,
+}
+
+#[cfg(feature = "vmi-consume")]
+impl core::fmt::Display for DataAccessMode {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl Default for Flags {
+    fn default() -> Self {
+        Flags::new()
+    }
+}
+impl Flags {}
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord)]
@@ -282,24 +400,18 @@ impl From<LayoutTableEntry> for Arena {
 }
 
 #[cfg(feature = "vmi-consume")]
-impl Display for LayoutTableEntry {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+impl core::fmt::Display for LayoutTableEntry {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let addr = self.addr_raw() as usize;
         let size = self.len() as usize;
         let system = self.flags().contains(Flags::SYSTEM);
         let present = self.flags().contains(Flags::PRESENT);
 
         let usage = match () {
-            _ if self.flags().contains(Flags::STACK) => "STACK",
-            _ if self.flags().contains(Flags::CODE) => "CODE",
-            _ if self.flags().contains(Flags::DATA) => match () {
-                _ if self.flags().contains(Flags::READ) => "DATA - READ",
-                _ if self.flags().contains(Flags::WRITE) => "DATA - WRITE",
-                _ if self.flags().contains(Flags::SHARED_OWNED) => "DATA - SHARED OWNED",
-                _ if self.flags().contains(Flags::SHARED_FOREIGN) => "DATA - SHARED FOREIGN",
-                _ => "DATA - UNKNOWN",
-            },
-            _ => "",
+            _ if self.flags().is_stack() => String::from("STACK"),
+            _ if self.flags().is_code() => String::from("CODE"),
+            _ if !self.flags().is_code() => format!("{}", self.flags().data_access_mode().unwrap()),
+            _ => String::new(),
         };
 
         write!(
@@ -350,14 +462,18 @@ mod test {
     fn flag_build() {
         assert_eq!(Flags::empty().bits(), 0);
         assert_eq!(
-            (Flags::PRESENT | Flags::DATA | Flags::SHARED_FOREIGN).bits(),
+            (Flags::PRESENT | Flags::DATA_SHARED_FOREIGN).bits(),
             0b0010_0001
         );
-        assert!((Flags::PRESENT | Flags::DATA | Flags::SHARED_FOREIGN).contains(Flags::DATA));
-        assert!(
-            (Flags::PRESENT | Flags::DATA | Flags::SHARED_FOREIGN).contains(Flags::SHARED_FOREIGN)
+        assert!(!(Flags::PRESENT | Flags::DATA_SHARED_FOREIGN).is_code());
+        assert_eq!(
+            (Flags::PRESENT | Flags::DATA_SHARED_FOREIGN).data_access_mode(),
+            Some(DataAccessMode::SharedForeign)
         );
-        assert!((Flags::PRESENT | Flags::DATA | Flags::READ).contains(Flags::READ));
+        assert_eq!(
+            (Flags::PRESENT | Flags::DATA_READ).data_access_mode(),
+            Some(DataAccessMode::Read)
+        );
     }
 
     #[test]
@@ -369,5 +485,72 @@ mod test {
         }
 
         assert_eq!(5, layout.len_present())
+    }
+
+    #[test]
+    fn test_present_flag() {
+        let mut flags = Flags::new();
+        assert!(!flags.is_present());
+
+        flags.set_present(true);
+        assert!(flags.is_present());
+        assert_eq!(flags.bits(), 0b00000001);
+
+        flags.set_present(false);
+        assert!(!flags.is_present());
+    }
+
+    #[test]
+    fn test_system_flag() {
+        let mut flags = Flags::new();
+        assert!(!flags.is_system());
+
+        flags.set_system(true);
+        assert!(flags.is_system());
+        assert_eq!(flags.bits(), 0b00000010);
+    }
+
+    #[test]
+    fn test_code_data_flag() {
+        let mut flags = Flags::new();
+        assert!(!flags.is_code());
+
+        flags.set_code(true);
+        assert!(flags.is_code());
+        assert_eq!(flags.bits(), 0b00001000);
+    }
+
+    #[test]
+    fn test_data_access_modes() {
+        let mut flags = Flags::new();
+        flags.set_code(false); // Ensure it's data
+
+        flags.set_data_access_mode(DataAccessMode::Read).unwrap();
+        assert_eq!(flags.data_access_mode(), Some(DataAccessMode::Read));
+
+        flags.set_data_access_mode(DataAccessMode::Write).unwrap();
+        assert_eq!(flags.data_access_mode(), Some(DataAccessMode::Write));
+
+        flags
+            .set_data_access_mode(DataAccessMode::SharedForeign)
+            .unwrap();
+        assert_eq!(
+            flags.data_access_mode(),
+            Some(DataAccessMode::SharedForeign)
+        );
+
+        flags
+            .set_data_access_mode(DataAccessMode::SharedOwned)
+            .unwrap();
+        assert_eq!(flags.data_access_mode(), Some(DataAccessMode::SharedOwned));
+    }
+
+    #[test]
+    fn test_data_access_on_code_section() {
+        let mut flags = Flags::new();
+        flags.set_code(true);
+
+        assert_eq!(flags.data_access_mode(), None);
+        assert!(flags.set_data_access_mode(DataAccessMode::Read).is_err());
     }
 }

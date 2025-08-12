@@ -3,7 +3,6 @@ pub mod hypercall;
 mod linker;
 pub mod upcall;
 
-use crate::linker::hypercall::Function;
 use bmvm_common::TypeSignature;
 use bmvm_common::hash::SignatureHasher;
 use bmvm_common::registry::Params;

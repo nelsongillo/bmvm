@@ -58,7 +58,7 @@ pub fn setup() -> Result<(), ExitCode> {
         .find(|entry| {
             entry
                 .flags()
-                .contains(Flags::PRESENT | Flags::DATA | Flags::SHARED_FOREIGN)
+                .contains(Flags::PRESENT | Flags::DATA_SHARED_FOREIGN)
         })
         .ok_or(ExitCode::InvalidMemoryLayout)?;
 
@@ -67,29 +67,28 @@ pub fn setup() -> Result<(), ExitCode> {
         .find(|entry| {
             entry
                 .flags()
-                .contains(Flags::PRESENT | Flags::DATA | Flags::SHARED_OWNED)
+                .contains(Flags::PRESENT | Flags::DATA_SHARED_OWNED)
         })
         .ok_or(ExitCode::InvalidMemoryLayout)?;
 
     // stage 2 -> Layout parsed
     write(IO_PORT, 1);
 
+    // set up the paging structure
+    paging::setup(table, region_sys)?;
+
+    write(IO_PORT, 2);
+
     // set up the Interrupt Table
     idt::setup(&region_sys, 0)?;
 
     // stage 3 -> IDT done
-    write(IO_PORT, 2);
+    write(IO_PORT, 3);
 
     // set up the Global Descriptor Table
     gdt::setup(&region_sys, IDT_SPACE_REQ)?;
 
     // stage 4 -> GDT done
-    write(IO_PORT, 3);
-
-    // set up the paging structure
-    paging::setup(table, region_sys)?;
-
-    // stage 5 -> Paging Done
     write(IO_PORT, 4);
 
     // set up the allocator for the VMI

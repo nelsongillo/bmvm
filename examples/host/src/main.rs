@@ -1,6 +1,5 @@
 use bmvm_host::{
-    ConfigBuilder, Foreign, ForeignBuf, RuntimeBuilder, Shared, SharedBuf, TypeSignature, alloc,
-    expose, linker,
+    ConfigBuilder, ForeignBuf, RuntimeBuilder, Shared, TypeSignature, alloc, expose, linker,
 };
 use clap::Parser;
 
@@ -38,28 +37,39 @@ extern "C" fn x(_a: Foo, _b: i32) -> Shared<Bar> {
     owned.into_shared()
 }
 
+const FUNC_FOO: &str = "foo";
+type FooParams = (u32, Shared<Foo>);
+type FooResult = ForeignBuf;
+
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     // logging
     let mut log_builder = env_logger::Builder::from_default_env();
-    if args.debug {
-        log_builder.filter_level(log::LevelFilter::Debug);
-    } else {
-        log_builder.filter_level(log::LevelFilter::Info);
+    match args.debug {
+        true => log_builder.filter_level(log::LevelFilter::Debug),
+        false => log_builder.filter_level(log::LevelFilter::Info),
     }
-    log_builder.init();
+    .init();
 
     // configuration
     let cfg = ConfigBuilder::new().debug(args.debug);
+    let linker =
+        linker::ConfigBuilder::new().register_guest_function::<FooParams, FooResult>(FUNC_FOO);
 
-    let mut runtime = RuntimeBuilder::new()
-        .linker(linker::ConfigBuilder::new())
+    let runtime = RuntimeBuilder::new()
+        .linker(linker)
         .vm(cfg)
         .executable(args.guest)
         .build()?;
-    match runtime.setup() {
-        Ok(_) => Ok(()),
-        Err(e) => Err(anyhow::anyhow!("{:?}", e)),
-    }
+    let mut module = runtime.setup()?;
+
+    let mut owned_foo = unsafe { alloc::<Foo>()? };
+    let foo = owned_foo.as_mut();
+    foo.0.a = 0xdead;
+    foo.0.b = 0xbeef;
+    let shared_foo = owned_foo.into_shared();
+
+    let _ = module.call::<FooParams, FooResult>(FUNC_FOO, (1312, shared_foo))?;
+    Ok(())
 }

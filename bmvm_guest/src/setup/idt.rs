@@ -5,9 +5,9 @@ use x86_64::set_general_handler;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
 
 pub(crate) fn setup(sys: &LayoutTableEntry, offset: u64) -> Result<(), ExitCode> {
-    let idt_ptr = (sys.addr_raw() + offset) as *mut InterruptDescriptorTable;
-    let idt = unsafe { &mut *idt_ptr };
-    set_general_handler!(idt, handler_upcall_irq);
+    // let idt_ptr = (sys.addr_raw() + offset) as *mut InterruptDescriptorTable;
+    // let idt = unsafe { &mut *idt_ptr };
+    // set_general_handler!(idt, handler_upcall_irq);
     Ok(())
 }
 

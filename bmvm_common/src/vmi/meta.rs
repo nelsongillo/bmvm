@@ -49,10 +49,6 @@ fn read_cstring(input: &[u8]) -> Result<(CString, usize)> {
 pub struct FnPtr(NonZeroU64);
 
 impl FnPtr {
-    fn as_bytes(&self) -> [u8; size_of::<u64>()] {
-        self.0.get().to_ne_bytes()
-    }
-
     pub fn as_u64(&self) -> u64 {
         self.0.get()
     }

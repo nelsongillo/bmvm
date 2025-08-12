@@ -5,12 +5,14 @@ use crate::{
 use crate::{linker, vm};
 use bmvm_common::registry::Params;
 use bmvm_common::vmi::ForeignShareable;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("No executable provided")]
+    MissingExecutable,
     #[error("upcall error: {0}")]
     Upcall(vm::Error),
     #[error("linker error: {0}")]
@@ -19,6 +21,27 @@ pub enum Error {
     Vm(#[from] vm::Error),
     #[error("elf error: {0}")]
     Elf(#[from] elf::Error),
+}
+
+/// A module is a loaded and initialized guest executable on which the host can call functions.
+pub struct Module {
+    vm: vm::Vm,
+}
+
+impl Module {
+    /// Try calling a function on the guest with the provided parameters.
+    /// Error if the function is not found or the signatures do not match.
+    pub fn call<P, R>(&mut self, func: &'static str, params: P) -> Result<R>
+    where
+        P: Params,
+        R: ForeignShareable,
+    {
+        self.vm
+            .upcall_exec_setup::<P, R>(func, params)
+            .map_err(Error::Upcall)?;
+        self.vm.run::<R>()?;
+        self.vm.upcall_result::<R>().map_err(Error::Upcall)
+    }
 }
 
 pub struct Runtime {
@@ -49,39 +72,30 @@ impl Runtime {
         })
     }
 
-    /// Setup the guest by loading the proxy OS and executing the guest setup code.
-    pub fn setup(&mut self) -> Result<()> {
+    /// Setup the module by loading the proxy OS and executing the module setup code.
+    /// Returns a initialized Module on which the host can call functions
+    pub fn setup(mut self) -> Result<Module> {
         self.vm.load_exec(&mut self.executable)?;
-        self.vm.run::<()>().map_err(Error::Vm)
-    }
+        let (upcalls, hypercalls) = self.linker.into_calls();
 
-    /// Try calling a function on the guest with the provided parameters.
-    /// Error if the function is not found or the signatures do not match.
-    pub fn call<P, R>(&mut self, func: &'static str, params: P) -> Result<R>
-    where
-        P: Params,
-        R: ForeignShareable,
-    {
-        self.vm
-            .upcall_exec_setup::<P, R>(func, params)
-            .map_err(Error::Upcall)?;
-        self.vm.run::<R>()?;
-        self.vm.upcall_result::<R>().map_err(Error::Upcall)
+        self.vm.link(hypercalls, upcalls);
+        self.vm.run::<()>().map_err(Error::Vm)?;
+        Ok(Module { vm: self.vm })
     }
 }
 
-pub struct RuntimeBuilder {
+pub struct RuntimeBuilder<P: AsRef<Path>> {
     vm: vm::Config,
     linker: linker::Config,
-    path: PathBuf,
+    path: Option<P>,
 }
 
-impl RuntimeBuilder {
+impl<P: AsRef<Path>> RuntimeBuilder<P> {
     pub fn new() -> Self {
         Self {
             vm: vm::Config::default(),
             linker: linker::Config::default(),
-            path: PathBuf::new(),
+            path: None,
         }
     }
 
@@ -95,12 +109,16 @@ impl RuntimeBuilder {
         self
     }
 
-    pub fn executable(mut self, path: impl AsRef<Path>) -> Self {
-        self.path = path.as_ref().to_path_buf();
+    pub fn executable(mut self, path: P) -> Self {
+        self.path = Some(path);
         self
     }
 
     pub fn build(self) -> Result<Runtime> {
-        Runtime::new(self.vm, self.linker, self.path)
+        if self.path.is_none() {
+            return Err(Error::MissingExecutable);
+        }
+
+        Runtime::new(self.vm, self.linker, self.path.unwrap())
     }
 }

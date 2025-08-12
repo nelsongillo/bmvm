@@ -98,11 +98,11 @@ pub struct ExecBundle {
 fn section_name_to_flags(name: &str) -> Result<Flags> {
     match name {
         _ if name.starts_with(".text") => Ok(Flags::CODE), // Executable code
-        _ if name.starts_with(".rodata") => Ok(Flags::DATA | Flags::READ), // Read-only constants/data
-        _ if name.starts_with(".eh_frame") => Ok(Flags::DATA | Flags::READ), // Exception handling tables (read-only)
-        _ if name.starts_with(".data") => Ok(Flags::DATA | Flags::WRITE), // Initialized writable data
-        _ if name.starts_with(".bss") => Ok(Flags::DATA | Flags::WRITE), // Uninitialized data (zero-filled)
-        _ if name.starts_with(".got") => Ok(Flags::DATA | Flags::READ),
+        _ if name.starts_with(".rodata") => Ok(Flags::DATA_READ), // Read-only constants/data
+        _ if name.starts_with(".eh_frame") => Ok(Flags::DATA_READ), // Exception handling tables (read-only)
+        _ if name.starts_with(".data") => Ok(Flags::DATA_WRITE),    // Initialized writable data
+        _ if name.starts_with(".bss") => Ok(Flags::DATA_WRITE), // Uninitialized data (zero-filled)
+        _ if name.starts_with(".got") => Ok(Flags::DATA_READ),
         _ => Err(Error::ElfUnsupportedSection(name.to_string())),
     }
 }

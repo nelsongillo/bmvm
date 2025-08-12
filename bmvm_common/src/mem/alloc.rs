@@ -11,9 +11,6 @@ use talc::{ErrOnOom, Span, Talc};
 static ALLOC_FOREIGN: Once<AllocImpl<spin::Mutex<()>, ErrOnOom>> = Once::new();
 static ALLOC_OWN: Once<AllocImpl<spin::Mutex<()>, ErrOnOom>> = Once::new();
 
-const SHAREABLE_T: &[u8] = b"Shareable<T>";
-const SHAREABLE_BUF: &[u8] = b"ShareableBuf";
-
 #[cfg_attr(
     feature = "vmi-consume",
     derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)
@@ -335,21 +332,6 @@ impl<T: TypeSignature> From<Owned<T>> for Shared<T> {
     }
 }
 
-impl<T: TypeSignature> TypeSignature for Shared<T> {
-    const SIGNATURE: u64 = {
-        let mut h = crate::hash::SignatureHasher::new();
-        h.write(0u64.to_le_bytes().as_slice());
-        h.write(SHAREABLE_T);
-        h.write(<T as TypeSignature>::SIGNATURE.to_le_bytes().as_slice());
-        h.finish()
-    };
-    const IS_PRIMITIVE: bool = false;
-    #[cfg(feature = "vmi-consume")]
-    fn name() -> String {
-        String::from(format!("Shared<{}>", T::name()))
-    }
-}
-
 /// Owned buffer allocated for future sharing with the VMI peer.
 /// VMI messages attributes should use `SharedBuf` instead of `OwnedBuf` to hint on a
 /// type-level that the receiving peer should not mutate the underlying data.
@@ -406,31 +388,6 @@ impl SharedBuf {
     }
 }
 
-impl TypeSignature for SharedBuf {
-    const SIGNATURE: u64 = {
-        let mut h = crate::hash::SignatureHasher::new();
-        h.write(0u64.to_le_bytes().as_slice());
-        h.write(SHAREABLE_BUF);
-        h.write(
-            <OffsetPtr<u8> as TypeSignature>::SIGNATURE
-                .to_le_bytes()
-                .as_slice(),
-        );
-        h.write(1u64.to_le_bytes().as_slice());
-        h.write(
-            <NonZeroUsize as TypeSignature>::SIGNATURE
-                .to_le_bytes()
-                .as_slice(),
-        );
-        h.finish()
-    };
-    const IS_PRIMITIVE: bool = false;
-    #[cfg(feature = "vmi-consume")]
-    fn name() -> String {
-        String::from("SharedBuf")
-    }
-}
-
 /// Foreign memory allocated by the VMI peer.
 /// This wraps a raw pointer and manages deallocation on drop.
 #[repr(transparent)]
@@ -477,21 +434,6 @@ impl<T: Unpackable> Foreign<T> {
     }
 }
 
-impl<T: TypeSignature> TypeSignature for Foreign<T> {
-    const SIGNATURE: u64 = {
-        let mut h = crate::hash::SignatureHasher::new();
-        h.write(0u64.to_le_bytes().as_slice());
-        h.write(SHAREABLE_T);
-        h.write(<T as TypeSignature>::SIGNATURE.to_le_bytes().as_slice());
-        h.finish()
-    };
-    const IS_PRIMITIVE: bool = false;
-    #[cfg(feature = "vmi-consume")]
-    fn name() -> String {
-        String::from(format!("Foreign<{}>", T::name()))
-    }
-}
-
 impl<T: TypeSignature> Drop for Foreign<T> {
     fn drop(&mut self) {
         // unwrap is safe because the allocator is needed to even construct the foreign pointer
@@ -515,31 +457,6 @@ impl AsRef<[u8]> for ForeignBuf {
     }
 }
 
-impl TypeSignature for ForeignBuf {
-    const SIGNATURE: u64 = {
-        let mut h = crate::hash::SignatureHasher::new();
-        h.write(0u64.to_le_bytes().as_slice());
-        h.write(SHAREABLE_BUF);
-        h.write(
-            <OffsetPtr<u8> as TypeSignature>::SIGNATURE
-                .to_le_bytes()
-                .as_slice(),
-        );
-        h.write(1u64.to_le_bytes().as_slice());
-        h.write(
-            <NonZeroUsize as TypeSignature>::SIGNATURE
-                .to_le_bytes()
-                .as_slice(),
-        );
-        h.finish()
-    };
-    const IS_PRIMITIVE: bool = false;
-    #[cfg(feature = "vmi-consume")]
-    fn name() -> String {
-        String::from("ForeignBuf")
-    }
-}
-
 impl TypeSignature for &ForeignBuf {
     const SIGNATURE: u64 = {
         let mut h = crate::hash::SignatureHasher::from_partial(ForeignBuf::SIGNATURE);
@@ -560,3 +477,59 @@ pub unsafe trait Unpackable: TypeSignature {
     /// unpack copies the struct values via ptr::read
     unsafe fn unpack(this: *const Self) -> Self::Output;
 }
+
+macro_rules! impl_type_signature_for_shareable {
+    ($($t:ident),*) => {
+        $(
+        impl<T: TypeSignature> TypeSignature for $t<T> {
+            const SIGNATURE: u64 = {
+                let mut h = crate::hash::SignatureHasher::new();
+                h.write(0u64.to_le_bytes().as_slice());
+                h.write(b"Shareable<T>");
+                h.write(<T as TypeSignature>::SIGNATURE.to_le_bytes().as_slice());
+                h.finish()
+            };
+            const IS_PRIMITIVE: bool = false;
+            #[cfg(feature = "vmi-consume")]
+            fn name() -> String {
+                String::from(format!("{}<{}>", stringify!($t), T::name()))
+            }
+        }
+        )*
+    };
+}
+
+impl_type_signature_for_shareable!(Foreign, Shared);
+
+macro_rules! impl_type_signature_for_buf {
+    ($($t:ident),*) => {
+        $(
+        impl TypeSignature for $t {
+            const SIGNATURE: u64 = {
+                let mut h = crate::hash::SignatureHasher::new();
+                h.write(0u64.to_le_bytes().as_slice());
+                h.write(b"ShareableBuf");
+                h.write(
+                    <OffsetPtr<u8> as TypeSignature>::SIGNATURE
+                        .to_le_bytes()
+                        .as_slice(),
+                );
+                h.write(1u64.to_le_bytes().as_slice());
+                h.write(
+                    <NonZeroUsize as TypeSignature>::SIGNATURE
+                        .to_le_bytes()
+                        .as_slice(),
+                );
+                h.finish()
+            };
+            const IS_PRIMITIVE: bool = false;
+            #[cfg(feature = "vmi-consume")]
+            fn name() -> String {
+                String::from(stringify!($t))
+            }
+        }
+        )*
+    };
+}
+
+impl_type_signature_for_buf!(ForeignBuf, SharedBuf);

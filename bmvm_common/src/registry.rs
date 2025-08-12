@@ -1,3 +1,4 @@
+#![allow(non_snake_case)]
 use crate::hash::SignatureHasher;
 use crate::mem::{Error as MemError, Shared, alloc};
 #[allow(unused_imports)]
@@ -122,7 +123,7 @@ macro_rules! impl_params_and_typesignature {
 
         #[allow(unused_parens)]
         #[sealed::sealed]
-        impl<$($t),*> Params for ($($t,)*) where $($t: TypeSignature,)* {
+        impl<$($t),*> Params for ($($t),*) where $($t: TypeSignature,)* {
             fn strings() -> Vec<String> {
                 vec![$($t::name()),*]
             }

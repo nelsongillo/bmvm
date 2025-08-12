@@ -4,7 +4,7 @@ use crate::linker::upcall;
 use bmvm_common::error::ExitCode;
 use bmvm_common::mem;
 use bmvm_common::registry::Params;
-use bmvm_common::vmi::{ForeignShareable, OwnedShareable, Signature, Transport};
+use bmvm_common::vmi::{ForeignShareable, Signature, Transport};
 
 type Result<T> = std::result::Result<T, Error>;
 

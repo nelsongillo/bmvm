@@ -1,9 +1,11 @@
-use crate::alloc::{Allocator, ReadWrite, Region, RegionCollection};
+use crate::alloc::{Allocator, ProtoRegion, ReadWrite, Region, RegionCollection};
 use crate::elf::ExecBundle;
+use crate::linker::{hypercall, upcall};
 use crate::vm::registry::{Hypercalls, Upcalls};
 use crate::vm::vcpu::Vcpu;
 use crate::vm::{Config, registry, setup, vcpu};
 use crate::{GUEST_STACK_ADDR, GUEST_SYSTEM_ADDR, GUEST_TMP_SYSTEM_SIZE};
+use bmvm_common::HYPERCALL_IO_PORT;
 use bmvm_common::error::ExitCode;
 use bmvm_common::mem::{
     Align, AlignedNonZeroUsize, DefaultAddrSpace, DefaultAlign, Flags, LayoutTableEntry, PhysAddr,
@@ -15,8 +17,7 @@ use bmvm_common::{
     BMVM_MEM_LAYOUT_TABLE, BMVM_TMP_GDT, BMVM_TMP_IDT, BMVM_TMP_PAGING, BMVM_TMP_SYS, mem,
     region_abs_offset,
 };
-use bmvm_common::{HYPERCALL_IO_PORT, TypeSignature};
-use kvm_bindings::{KVM_API_VERSION, kvm_debug_exit_arch};
+use kvm_bindings::KVM_API_VERSION;
 use kvm_ioctls::{Cap, Kvm, VcpuExit, VmFd};
 use std::io::Write;
 
@@ -120,12 +121,28 @@ impl Vm {
     pub(crate) fn load_exec(&mut self, exec: &mut ExecBundle) -> Result<()> {
         // allocate a stack region
         let (stack, stack_entry) = self.alloc_stack(self.cfg.stack_size, GUEST_STACK_ADDR())?;
+        let stack_addr = stack.addr();
         self.mem_mappings.push(stack);
         exec.layout.push(stack_entry);
 
         // allocate shared memory managed by the guest and host
-        let (shared_guest, shared_guest_entry) = self.alloc_shared_guest()?;
-        let (shared_host, shared_host_entry) = self.alloc_shared_host()?;
+        // Memory layout: sys | stack | shared_guest | shared_host | ... | code
+        let guest_addr = PhysAddr::new(
+            AlignedNonZeroUsize::<DefaultAlign>::new_floor(
+                stack_addr.as_usize() - self.cfg.shared_guest.get(),
+            )
+            .unwrap()
+            .get() as u64,
+        );
+        let host_addr = PhysAddr::new(
+            AlignedNonZeroUsize::<DefaultAlign>::new_floor(
+                guest_addr.as_usize() - self.cfg.shared_guest.get(),
+            )
+            .unwrap()
+            .get() as u64,
+        );
+        let (shared_guest, shared_guest_entry) = self.alloc_shared_guest(guest_addr)?;
+        let (shared_host, shared_host_entry) = self.alloc_shared_host(host_addr)?;
         // initialize the respective allocators
         let owned = shared_host.as_arena();
         let foreign = shared_guest.as_arena();
@@ -164,13 +181,17 @@ impl Vm {
     }
 
     /// Pass the Host provided VMI function to the VM structure
-    pub(crate) fn link(&mut self, hypercalls: Hypercalls, upcalls: Upcalls) {
-        self.hypercalls = hypercalls;
-        self.upcalls = upcalls;
+    pub(crate) fn link(
+        &mut self,
+        hypercalls: Vec<hypercall::Function>,
+        upcalls: Vec<upcall::Function>,
+    ) {
+        self.hypercalls = Hypercalls::from(hypercalls);
+        self.upcalls = Upcalls::from(upcalls);
     }
 
     /// Expose the guest memory allocator used by this VM instance
-    pub fn allocator(&self) -> &Allocator {
+    pub(crate) fn allocator(&self) -> &Allocator {
         &self.manager
     }
 }
@@ -183,59 +204,60 @@ impl Vm {
         R: ForeignShareable,
     {
         log::debug!("executing vm");
-        match self.vcpu.run()? {
-            // IO Out should only be triggered by the hypercall
-            // execute hypercall or log warning otherwise
-            VcpuExit::IoOut(port, data) => {
-                if port == HYPERCALL_IO_PORT {
-                    return self.hypercall_exec();
+        loop {
+            match self.vcpu.run()? {
+                // IO Out should only be triggered by the hypercall
+                // execute hypercall or log warning otherwise
+                VcpuExit::IoOut(port, data) => {
+                    if port == HYPERCALL_IO_PORT {
+                        self.hypercall_exec()?;
+                    } else {
+                        log::warn!(
+                            "Unexpected IO write on port {:#x} with data {:X?}",
+                            port,
+                            data,
+                        );
+                    }
                 }
-
-                log::warn!(
-                    "Unexpected IO write on port {:#x} with data {:X?}",
-                    port,
-                    data,
-                );
-                Ok(())
-            }
-            // Check the exit code and react accordingly
-            VcpuExit::Hlt => {
-                let exit_code = ExitCode::from((self.vcpu.read_regs()?.rax & 0xFF) as u8);
-                match exit_code {
-                    ExitCode::Normal => {
-                        log::info!("normal exit, shutting down VM");
-                        self.state = State::Shutdown;
-                    }
-                    ExitCode::Ready => {
-                        log::info!("guest setup finished");
-                        self.state = State::Ready;
-                    }
-                    ExitCode::Return => {
-                        if self.state != State::UpcallExec {
-                            return Err(Error::UnexpectedUpcallReturn);
+                // Check the exit code and react accordingly
+                VcpuExit::Hlt => {
+                    let exit_code = ExitCode::from((self.vcpu.read_regs()?.rax & 0xFF) as u8);
+                    match exit_code {
+                        ExitCode::Normal => {
+                            log::info!("normal exit, shutting down VM");
+                            self.state = State::Shutdown;
                         }
+                        ExitCode::Ready => {
+                            log::info!("guest setup finished");
+                            self.state = State::Ready;
+                        }
+                        ExitCode::Return => {
+                            if self.state != State::UpcallExec {
+                                return Err(Error::UnexpectedUpcallReturn);
+                            }
 
-                        log::info!("guest returned from upcall");
-                        self.state = State::UpcallExec;
+                            log::info!("guest returned from upcall");
+                            self.state = State::UpcallExec;
+                        }
+                        _ => log::error!("Exit Code: {:?}", exit_code),
                     }
-                    _ => log::error!("Exit Code: {:?}", exit_code),
-                }
-                self.react_to_exit_code(exit_code)?;
+                    self.react_to_exit_code(exit_code)?;
 
-                Ok(())
-            }
-            VcpuExit::Debug(debug) => {
-                let rip = self.vcpu.read_regs()?.rip;
-                log::debug!("Debug called at RIP: {:#x}", rip);
-                self.print_debug_info()?;
-                self.vcpu.enable_single_step().map_err(Error::Vcpu)
-            }
-            // Unexpected Exit
-            reason => {
-                log::error!("Unexpected exit reason: {:?}", reason);
-                &self.print_debug_info()?;
-                &self.dump_region(0x1000)?;
-                Err(Error::UnexpectedExit)
+                    return Ok(());
+                }
+                VcpuExit::Debug(_debug) => {
+                    let rip = self.vcpu.read_regs()?.rip;
+                    log::debug!("Debug called at RIP: {:#x}", rip);
+                    self.print_debug_info()?;
+                    self.vcpu.enable_single_step().map_err(Error::Vcpu)?
+                }
+                // Unexpected Exit
+                reason => {
+                    log::error!("Unexpected exit reason: {:?}", reason);
+                    let _ = &self.print_debug_info()?;
+                    let _ = &self.dump_region(0x1000)?;
+                    return Err(Error::UnexpectedExit);
+                }
             }
         }
     }
@@ -332,42 +354,40 @@ impl Vm {
         let entry = LayoutTableEntry::new(
             PhysAddr::new(guest_addr),
             size,
-            Flags::PRESENT | Flags::WRITE | Flags::STACK,
+            Flags::PRESENT | Flags::DATA_WRITE | Flags::STACK,
         );
 
         Ok((stack, entry))
     }
 
     /// allocate shared memory managed by the guest
-    fn alloc_shared_guest(&mut self) -> Result<(Region<ReadWrite>, LayoutTableEntry)> {
+    fn alloc_shared_guest(
+        &mut self,
+        addr: PhysAddr,
+    ) -> Result<(Region<ReadWrite>, LayoutTableEntry)> {
         let region = self
             .manager
             .alloc_accessible::<ReadWrite>(self.cfg.shared_guest)?
-            .set_guest_addr(GUEST_SYSTEM_ADDR());
+            .set_guest_addr(addr);
 
         let size = (self.cfg.shared_guest.get() as u64 / DefaultAlign::ALIGNMENT) as u32;
-        let layout = LayoutTableEntry::new(
-            region.addr(),
-            size,
-            Flags::PRESENT | Flags::USER | Flags::DATA | Flags::SHARED_OWNED,
-        );
+        let layout = LayoutTableEntry::new(addr, size, Flags::PRESENT | Flags::DATA_SHARED_OWNED);
 
         Ok((region, layout))
     }
 
     /// allocate shared memory managed by the host
-    fn alloc_shared_host(&mut self) -> Result<(Region<ReadWrite>, LayoutTableEntry)> {
+    fn alloc_shared_host(
+        &mut self,
+        addr: PhysAddr,
+    ) -> Result<(Region<ReadWrite>, LayoutTableEntry)> {
         let region = self
             .manager
             .alloc_accessible::<ReadWrite>(self.cfg.shared_host)?
-            .set_guest_addr(GUEST_SYSTEM_ADDR());
+            .set_guest_addr(addr);
 
         let size = (self.cfg.shared_host.get() as u64 / DefaultAlign::ALIGNMENT) as u32;
-        let layout = LayoutTableEntry::new(
-            region.addr(),
-            size,
-            Flags::PRESENT | Flags::USER | Flags::DATA | Flags::SHARED_FOREIGN,
-        );
+        let layout = LayoutTableEntry::new(addr, size, Flags::PRESENT | Flags::DATA_SHARED_FOREIGN);
 
         Ok((region, layout))
     }

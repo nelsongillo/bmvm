@@ -2,13 +2,10 @@ use crate::elf::ExecBundle;
 use crate::linker::config::Config;
 use crate::linker::hypercall::{CallableFunction, ConversionError};
 use crate::linker::{CallDirection, Func, hypercall, upcall};
-use bmvm_common::registry::Params;
-use bmvm_common::vmi::{FnCall, FnPtr, ForeignShareable, Signature, UpcallFn};
+use bmvm_common::vmi::{FnCall, FnPtr, Signature};
 use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, CString};
 use std::fmt::{Display, Formatter};
-use std::hash::Hash;
-use std::num::{NonZeroU64, NonZeroUsize};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -115,7 +112,7 @@ impl From<Vec<&FnCall>> for GuestFnCollision {
     fn from(funcs: Vec<&FnCall>) -> Self {
         let funcs = funcs
             .iter()
-            .map(|f| f.clone().to_owned())
+            .map(|f| f.to_owned().clone())
             .collect::<Vec<FnCall>>();
         Self(funcs)
     }
@@ -140,7 +137,7 @@ impl From<Vec<&Func>> for HostFnCollision {
     fn from(funcs: Vec<&Func>) -> Self {
         let funcs = funcs
             .iter()
-            .map(|f| f.clone().to_owned())
+            .map(|f| f.to_owned().clone())
             .collect::<Vec<Func>>();
         Self(funcs)
     }
@@ -181,7 +178,6 @@ impl From<Vec<Error>> for Error {
 pub struct Linker {
     cfg: Config,
     hypercalls: Vec<hypercall::Function>,
-    upcalls: Vec<upcall::Function>,
 }
 
 impl Linker {
@@ -189,19 +185,7 @@ impl Linker {
         Ok(Self {
             cfg,
             hypercalls: Vec::new(),
-            upcalls: Vec::new(),
         })
-    }
-
-    /// Register a function on the guest, which will be called by the host.
-    pub fn register_guest_function<P, R>(mut self, name: &'static str) -> Self
-    where
-        P: Params,
-        R: ForeignShareable,
-    {
-        let func = upcall::Function::new::<P, R>(name);
-        self.upcalls.push(func);
-        self
     }
 
     /// Performs the linking process by validating guest function calls against host implementations
@@ -244,14 +228,14 @@ impl Linker {
     /// - `Err(Error)` if a single error occurred
     /// - `Err(Error::Joined)` if multiple errors occurred
     fn link_upcall(&mut self, bundle: &ExecBundle) -> Result<()> {
-        let result = ValidationResults::new(&self.upcalls, &bundle.expose, |f| &f.base);
+        let result = ValidationResults::new(&self.cfg.upcalls, &bundle.expose, |f| &f.base);
         let _ = result.into_error((), CallDirection::HostToGuest, self.cfg.error_unused_guest)?;
 
         // TODO: include in first pass
         let mut errs = Vec::new();
         let hashed_upcalls: HashMap<Signature, FnPtr> =
             bundle.upcalls.iter().map(|f| (f.sig, f.func)).collect();
-        for upcall in &mut self.upcalls {
+        for upcall in &mut self.cfg.upcalls {
             match hashed_upcalls.get(&upcall.base.sig) {
                 Some(ptr) => upcall.link(ptr.clone()),
                 None => errs.push(Error::MissingUpcallImpl {
@@ -261,6 +245,10 @@ impl Linker {
         }
 
         Error::with_errors((), errs)
+    }
+
+    pub(crate) fn into_calls(self) -> (Vec<upcall::Function>, Vec<hypercall::Function>) {
+        (self.cfg.upcalls, self.hypercalls)
     }
 
     /// Link the expected hypercalls by the guest actually provided implementations by the host.
@@ -328,6 +316,10 @@ impl<'a> ValidationResults<'a> {
     }
 
     fn into_error<T>(self, value: T, direction: CallDirection, err: bool) -> Result<T> {
+        if self.is_empty() {
+            return Ok(value);
+        }
+
         let mut errors = Vec::new();
 
         // map potential guest collisions to errors
@@ -358,8 +350,8 @@ impl<'a> ValidationResults<'a> {
                 .sig_mismatches
                 .iter()
                 .map(|(g, h)| Error::SignatureMismatch {
-                    guest: g.clone().to_owned(),
-                    host: h.clone().to_owned(),
+                    guest: g.to_owned().clone(),
+                    host: h.to_owned().clone(),
                 });
             errors.extend(errs);
         }
@@ -370,7 +362,7 @@ impl<'a> ValidationResults<'a> {
                 if !&self.unmatched_host.is_empty() {
                     for f in self.unmatched_host.iter() {
                         let err = Error::MissingUpcallImpl {
-                            func: f.clone().to_owned(),
+                            func: f.to_owned().clone(),
                         };
                         errors.push(err);
                     }
@@ -383,7 +375,7 @@ impl<'a> ValidationResults<'a> {
                             self.unmatched_guest
                                 .iter()
                                 .map(|f| Error::GuestFunctionUnused {
-                                    func: f.clone().to_owned(),
+                                    func: f.to_owned().clone(),
                                 });
                         errors.extend(errs);
                     } else {
@@ -398,7 +390,7 @@ impl<'a> ValidationResults<'a> {
                 if !&self.unmatched_guest.is_empty() {
                     for f in self.unmatched_guest.iter() {
                         let err = Error::MissingHypercallImpl {
-                            func: f.clone().to_owned(),
+                            func: f.to_owned().clone(),
                         };
                         errors.push(err);
                     }
@@ -411,7 +403,7 @@ impl<'a> ValidationResults<'a> {
                             .unmatched_host
                             .iter()
                             .map(|f| Error::HostFunctionUnused {
-                                func: f.clone().to_owned(),
+                                func: f.to_owned().clone(),
                             });
                         errors.extend(errs);
                     } else {
@@ -429,7 +421,10 @@ impl<'a> ValidationResults<'a> {
     fn host_maps<T>(
         host: &'a [T],
         extract: fn(&'a T) -> &'a Func,
-    ) -> (HashMap<&str, &Func>, HashMap<Signature, Vec<&Func>>) {
+    ) -> (
+        HashMap<&'a str, &'a Func>,
+        HashMap<Signature, Vec<&'a Func>>,
+    ) {
         let mut by_name = HashMap::<&str, &Func>::with_capacity(host.len());
         let mut by_sig = HashMap::<Signature, Vec<&Func>>::with_capacity(host.len());
 

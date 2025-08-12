@@ -342,6 +342,7 @@ pub fn gen_callmeta(
     let meta_name_tuple = format_ident!("{}{}", STATIC_META_TUPLE, fn_name.to_uppercase());
     let meta_name_sig = format_ident!("{}{}", STATIC_META_SIG, fn_name.to_uppercase());
     let meta_name = format_ident!("{}{}", STATIC_META, fn_name.to_uppercase());
+    let var_param_hasher = format_ident!("hasher_params");
 
     // Get the CallMeta as bytes and prefix with the size (u16)
     let bytes = meta.to_bytes();
@@ -361,19 +362,16 @@ pub fn gen_callmeta(
     let ty_typesignature = quote! {#crate_bmvm::TypeSignature};
 
     // Convert each string to a syn::Type and quote the hashing line
-    let mut hash_lines = params
+    let param_hash_lines = params
         .iter()
         .enumerate()
         .map(|(idx, ty)| {
             quote! {
-                hasher.write((#idx as u64).to_le_bytes().as_slice());
-                hasher.write(<#ty as #ty_typesignature>::SIGNATURE.to_le_bytes().as_slice());
+                #var_param_hasher.write((#idx as u64).to_le_bytes().as_slice());
+                #var_param_hasher.write(<#ty as #ty_typesignature>::SIGNATURE.to_le_bytes().as_slice());
             }
         })
         .collect::<Vec<_>>();
-    hash_lines.push(quote! {
-        hasher.write(<#return_type as #ty_typesignature>::SIGNATURE.to_le_bytes().as_slice());
-    });
 
     // The FnCall signature is stored in the first 8 bytes of the FnCall data. At the moment it is
     // only a partial signature, as the type hashes are not yet known and cannot be included on
@@ -385,9 +383,14 @@ pub fn gen_callmeta(
     let token = quote! {
         #[used]
         static #meta_name_tuple: ([u8; #meta_size], u64) = {
-            let mut hasher = #ty_hash::from_partial(#sig_seed);
-            #(#hash_lines)*
-            let sig = hasher.finish();
+            let mut #var_param_hasher = #ty_hash::new();
+            #(#param_hash_lines)*
+            let param_hash = #var_param_hasher.finish();
+
+            let mut sig_hasher = #ty_hash::from_partial(#sig_seed);
+            sig_hasher.write(param_hash.to_le_bytes().as_slice());
+            sig_hasher.write(<#return_type as #ty_typesignature>::SIGNATURE.to_le_bytes().as_slice());
+            let sig = sig_hasher.finish();
             let sig_bytes = sig.to_ne_bytes();
             let meta_suffix = [#(#suffix),*];
 
