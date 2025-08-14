@@ -194,6 +194,22 @@ impl Flags {
         }
     }
 
+    pub fn is_write(&self) -> bool {
+        if self.is_code() {
+            return false;
+        }
+        if self.is_stack() {
+            return true;
+        }
+
+        self.data_access_mode().is_some_and(|m| match m {
+            DataAccessMode::Read => false,
+            DataAccessMode::Write => true,
+            DataAccessMode::SharedForeign => true,
+            DataAccessMode::SharedOwned => true,
+        })
+    }
+
     /// Set the data access mode (only valid when !is_code())
     pub fn set_data_access_mode(&mut self, mode: DataAccessMode) -> Result<(), &'static str> {
         if self.is_code() {
@@ -346,13 +362,13 @@ impl LayoutTableEntry {
     }
 
     /// Gets the number of pages included in the entry
-    pub const fn len(&self) -> u32 {
+    pub const fn pages(&self) -> u32 {
         ((self.0 & Self::MASK_RETRIEVE_SIZE) >> 8) as u32
     }
 
     /// Returns the size of the entry in bytes. The size is page-aligned.
     pub const fn size(&self) -> u64 {
-        self.len() as u64 * DefaultAlign::ALIGNMENT
+        self.pages() as u64 * DefaultAlign::ALIGNMENT
     }
 
     /// Returns the starting address
@@ -392,7 +408,7 @@ impl From<LayoutTableEntry> for Arena {
         unsafe {
             let ptr = NonNull::new_unchecked(entry.addr().as_mut_ptr::<u8>());
             let size = NonZeroUsize::new(entry.size() as usize).unwrap();
-            let capacity = AlignedNonZeroUsize::new_aligned_unchecked(size);
+            let capacity = AlignedNonZeroUsize::new_unchecked(size);
 
             Arena { ptr, capacity }
         }
@@ -403,7 +419,7 @@ impl From<LayoutTableEntry> for Arena {
 impl core::fmt::Display for LayoutTableEntry {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let addr = self.addr_raw() as usize;
-        let size = self.len() as usize;
+        let size = self.pages() as usize;
         let system = self.flags().contains(Flags::SYSTEM);
         let present = self.flags().contains(Flags::PRESENT);
 
@@ -444,7 +460,7 @@ mod test {
             entry.addr().as_u64()
         );
         assert_eq!(Flags::empty().bits(), entry.flags().bits());
-        assert_eq!(0x1234, entry.len());
+        assert_eq!(0x1234, entry.pages());
         assert!(!entry.is_present());
     }
 

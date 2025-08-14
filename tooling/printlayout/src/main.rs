@@ -43,7 +43,7 @@ fn main() -> anyhow::Result<()> {
         table_entries.push(TableEntry {
             idx,
             addr: format!("{:X}", entry.addr().as_u64() as usize),
-            size: entry.len() as usize,
+            size: entry.pages() as usize,
             stack: entry.flags().contains(Flags::STACK),
             data_usage: access,
             code: entry.flags().contains(Flags::CODE),

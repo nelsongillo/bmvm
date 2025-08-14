@@ -1,6 +1,6 @@
 use crate::utils::Dirty;
 use crate::vm::setup::{GDT_ENTRY_SIZE, IDT_ENTRY_SIZE};
-use bmvm_common::mem::VirtAddr;
+use bmvm_common::mem::{PhysAddr, VirtAddr};
 use kvm_bindings::{
     __u16, CpuId, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_SINGLESTEP, kvm_dtable, kvm_guest_debug,
     kvm_guest_debug_arch, kvm_regs, kvm_sregs,
@@ -64,7 +64,7 @@ pub struct Idt {
 pub struct Setup {
     pub gdt: Gdt,
     pub idt: Idt,
-    pub paging: VirtAddr,
+    pub paging: PhysAddr,
     pub stack: VirtAddr,
     pub entry: VirtAddr,
     pub cpu_id: CpuId,
@@ -231,7 +231,7 @@ impl Vcpu {
     }
 
     /// set up the control registers for long mode with paging
-    fn setup_paging(&mut self, addr: VirtAddr) -> Result<()> {
+    fn setup_paging(&mut self, addr: PhysAddr) -> Result<()> {
         self.refresh_regs()?;
 
         self.sregs.mutate(|sregs| {

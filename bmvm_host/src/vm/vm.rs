@@ -1,25 +1,30 @@
-use crate::alloc::{Allocator, ProtoRegion, ReadWrite, Region, RegionCollection};
+use crate::alloc::{Allocator, ReadWrite, Region, RegionCollection};
 use crate::elf::ExecBundle;
 use crate::linker::{hypercall, upcall};
 use crate::vm::registry::{Hypercalls, Upcalls};
+use crate::vm::setup::{GDT_PAGE_REQUIRED, GDT_SIZE, IDT_PAGE_REQUIRED, IDT_SIZE};
 use crate::vm::vcpu::Vcpu;
-use crate::vm::{Config, registry, setup, vcpu};
-use crate::{GUEST_STACK_ADDR, GUEST_SYSTEM_ADDR, GUEST_TMP_SYSTEM_SIZE};
+use crate::vm::{Config, paging, registry, setup, vcpu};
+use crate::{GUEST_PAGING_ADDR, GUEST_STACK_ADDR, GUEST_SYSTEM_ADDR};
 use bmvm_common::HYPERCALL_IO_PORT;
 use bmvm_common::error::ExitCode;
+use bmvm_common::mem;
 use bmvm_common::mem::{
-    Align, AlignedNonZeroUsize, DefaultAddrSpace, DefaultAlign, Flags, LayoutTableEntry, PhysAddr,
-    VirtAddr, align_floor, init as init_vmi_alloc, virt_to_phys,
+    Align, AlignedNonZeroUsize, DefaultAddrSpace, DefaultAlign, Flags, LayoutTableEntry, Page4KiB,
+    PhysAddr, VirtAddr, align_floor, init as init_vmi_alloc,
 };
 use bmvm_common::registry::Params;
 use bmvm_common::vmi::{ForeignShareable, Transport};
-use bmvm_common::{
-    BMVM_MEM_LAYOUT_TABLE, BMVM_TMP_GDT, BMVM_TMP_IDT, BMVM_TMP_PAGING, BMVM_TMP_SYS, mem,
-    region_abs_offset,
-};
 use kvm_bindings::KVM_API_VERSION;
 use kvm_ioctls::{Cap, Kvm, VcpuExit, VmFd};
 use std::io::Write;
+use std::num::NonZeroUsize;
+
+const INITIAL_PAGE_ALLOC: usize = 16;
+const ADDITIONAL_PAGE_ALLOC: usize = 4;
+
+const SYS_REGION_OFFSET_GDT: u64 = 0;
+const SYS_REGION_OFFSET_IDT: u64 = SYS_REGION_OFFSET_GDT + GDT_SIZE;
 
 type Result<T> = core::result::Result<T, Error>;
 
@@ -33,6 +38,8 @@ pub enum Error {
     KvmMissingCapability(Cap),
     #[error("VM error: {0:?}")]
     Vm(kvm_ioctls::Error),
+    #[error("Error during paging setup: {0}")]
+    Paging(#[from] paging::Error),
     #[error("Memory mapping not found: {0:?}")]
     VmMemoryMappingNotFound(PhysAddr),
     #[error("Memory mapping is not readable: {0:?}")]
@@ -79,6 +86,8 @@ pub struct Vm {
     hypercalls: Hypercalls,
     upcalls: Upcalls,
     mem_mappings: RegionCollection,
+
+    paging_size: usize,
 }
 
 impl Vm {
@@ -114,6 +123,7 @@ impl Vm {
             hypercalls: Hypercalls::default(),
             upcalls: Upcalls::default(),
             mem_mappings: RegionCollection::new(),
+            paging_size: 0,
         })
     }
 
@@ -153,20 +163,14 @@ impl Vm {
         exec.layout.push(shared_guest_entry);
         exec.layout.push(shared_host_entry);
 
-        // allocate sys region
-        let (sys, sys_entry) = self.alloc_sys(exec)?;
-        self.mem_mappings.push(sys);
-        exec.layout.push(sys_entry);
-
         // prepare the system region
-        let sys = self.setup_long_mode_env(exec)?;
-        self.mem_mappings.push(sys);
+        let (gdt, idt, paging) = self.setup_long_mode_env(exec)?;
 
         // move all execution relevant regions to the vm
         self.mem_mappings.append(&mut exec.mem_regions);
 
         // setup the vcpu for execution
-        self.setup_cpu(exec.entry.as_virt_addr())?;
+        self.setup_cpu(exec.entry.as_virt_addr(), gdt, idt, paging)?;
 
         // map all regions to the guest
         for (slot, r) in self.mem_mappings.iter_mut().enumerate() {
@@ -393,72 +397,73 @@ impl Vm {
     }
 
     // TODO: Move to GuestOnly regions (if possible, wait for kernel upgrade)
-    /// allocate memory for the system components
-    fn alloc_sys(&mut self, exec: &ExecBundle) -> Result<(Region<ReadWrite>, LayoutTableEntry)> {
-        let layout_sys = setup::estimate_sys_region(&exec.layout)?;
-
-        let region = self
-            .manager
-            .alloc_accessible::<ReadWrite>(
-                AlignedNonZeroUsize::new_ceil(layout_sys.size() as usize).unwrap(),
-            )?
-            .set_guest_addr(GUEST_SYSTEM_ADDR());
-
-        Ok((region, layout_sys))
-    }
-
     /// Setting up a minimal environment containing paging structure, IDT and GDT to be able to enter
     /// long mode and start with the actual structure setup by the guest.
-    fn setup_long_mode_env(&mut self, exec: &ExecBundle) -> Result<Region<ReadWrite>> {
+    fn setup_long_mode_env(
+        &mut self,
+        exec: &mut ExecBundle,
+    ) -> Result<(PhysAddr, PhysAddr, PhysAddr)> {
         // allocate a region for the temporary system structures
-        let size_tmp_sys = AlignedNonZeroUsize::new_ceil(GUEST_TMP_SYSTEM_SIZE as usize).unwrap();
-        let mut temp_sys_region = self
+        let size_sys = AlignedNonZeroUsize::new_ceil((IDT_SIZE + GDT_SIZE) as usize).unwrap();
+        let mut sys_region = self
             .manager
-            .alloc_accessible::<ReadWrite>(size_tmp_sys)?
-            .set_guest_addr(BMVM_TMP_SYS);
+            .alloc_accessible::<ReadWrite>(size_sys)?
+            .set_guest_addr(GUEST_SYSTEM_ADDR());
 
         // write GDT
-        temp_sys_region.write_offset(
-            region_abs_offset(BMVM_TMP_GDT.as_u64()) as usize,
-            setup::gdt().as_ref(),
-        )?;
+        sys_region.write_offset(SYS_REGION_OFFSET_GDT as usize, setup::gdt().as_ref())?;
         // write LDT
-        temp_sys_region.write_offset(
-            region_abs_offset(BMVM_TMP_IDT.as_u64()) as usize,
-            setup::idt().as_ref(),
+        sys_region.write_offset(SYS_REGION_OFFSET_IDT as usize, setup::idt().as_ref())?;
+        self.mem_mappings.push(sys_region);
+        exec.layout.push(LayoutTableEntry::new(
+            GUEST_SYSTEM_ADDR(),
+            (IDT_PAGE_REQUIRED + GDT_PAGE_REQUIRED) as u32,
+            Flags::PRESENT | Flags::DATA_WRITE,
+        ));
+
+        // setup the paging structure
+        let regions = paging::setup(
+            &self.manager,
+            exec.layout.as_slice(),
+            GUEST_PAGING_ADDR(),
+            NonZeroUsize::new(INITIAL_PAGE_ALLOC).unwrap(),
+            NonZeroUsize::new(ADDITIONAL_PAGE_ALLOC).unwrap(),
         )?;
-        // write paging
-        let start_paging = region_abs_offset(BMVM_TMP_PAGING.as_u64()) as usize;
-        let entries = setup::paging(&self.cfg, &exec.layout);
-        for (idx, entry) in entries.iter() {
-            let write_to = start_paging + idx * 8;
-            temp_sys_region.write_offset(write_to, entry)?;
-        }
 
-        // write layout table
-        let start_layout_table = region_abs_offset(BMVM_MEM_LAYOUT_TABLE.as_u64()) as usize;
-        for (idx, entry) in exec.layout.iter().enumerate() {
-            let offset = idx * size_of::<LayoutTableEntry>();
-            temp_sys_region.write_offset(start_layout_table + offset, &entry.as_array())?;
+        let mut paging_size = 0;
+        for r in regions {
+            paging_size += r.capacity().get();
+            self.mem_mappings.push(r);
         }
+        self.paging_size = paging_size;
 
-        Ok(temp_sys_region)
+        let gdt = GUEST_SYSTEM_ADDR() + SYS_REGION_OFFSET_GDT;
+        let idt = GUEST_SYSTEM_ADDR() + SYS_REGION_OFFSET_IDT;
+        let paging = GUEST_PAGING_ADDR();
+
+        Ok((gdt, idt, paging))
     }
 
     /// Setting up the Vcpu with pointers to all necessary structures (Paging, IDT, GDT, etc)
-    fn setup_cpu(&mut self, entry_point: VirtAddr) -> Result<()> {
+    fn setup_cpu(
+        &mut self,
+        entry_point: VirtAddr,
+        gdt: PhysAddr,
+        idt: PhysAddr,
+        paging: PhysAddr,
+    ) -> Result<()> {
         let setup = vcpu::Setup {
             gdt: vcpu::Gdt {
-                addr: BMVM_TMP_GDT.as_virt_addr(),
+                addr: gdt.as_virt_addr(),
                 entries: 3,
                 code: 1,
                 data: 2,
             },
             idt: vcpu::Idt {
-                addr: BMVM_TMP_IDT.as_virt_addr(),
+                addr: idt.as_virt_addr(),
                 entries: 0,
             },
-            paging: BMVM_TMP_PAGING.as_virt_addr(),
+            paging: paging,
             stack: GUEST_STACK_ADDR().as_virt_addr() - 1,
             entry: entry_point,
             cpu_id: setup::cpuid(&self.kvm)?,
@@ -493,7 +498,7 @@ impl Vm {
 
         if cr2 != 0 {
             log::info!("PAGE FAULT at: cr2 -> {:#x}", cr2);
-            self.dump_region(cr2)?;
+            self.dump_paging()?;
         }
 
         Ok(())
@@ -504,9 +509,17 @@ impl Vm {
         self.dump_region_to_file(addr, format!("dump_{:#x}.bin", addr))
     }
 
+    fn dump_paging(&self) -> Result<()> {
+        let mut file =
+            std::fs::File::create(format!("dump_paging_{:x}.bin", GUEST_PAGING_ADDR())).unwrap();
+        self.mem_mappings
+            .dump(GUEST_PAGING_ADDR(), self.paging_size, &mut file)?;
+        Ok(())
+    }
+
     /// dump the region containing the address to file
     fn dump_region_to_file(&self, addr: u64, name: String) -> Result<()> {
-        let paddr = virt_to_phys::<DefaultAddrSpace>(unsafe { VirtAddr::new_unsafe(addr) });
+        let paddr = PhysAddr::<DefaultAddrSpace>::from(unsafe { VirtAddr::new_unsafe(addr) });
         if let Some(r) = self.mem_mappings.get(paddr) {
             match r.as_ref() {
                 Some(reference) => {

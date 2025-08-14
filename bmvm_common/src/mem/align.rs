@@ -139,10 +139,10 @@ macro_rules! impl_aligned_non_zero {
             }
 
             /// Creates from already aligned non-zero value
-            pub fn new_aligned(value: $nonzero) -> Option<Self> {
-                if A::is_aligned(value.get() as u64) {
-                    Some(Self {
-                        inner: value,
+            pub fn new_aligned(value: $int) -> Option<Self> {
+                if A::is_aligned(value as u64) {
+                    <$nonzero>::new(value).map(|inner| Self {
+                        inner,
                         _alignment: PhantomData,
                     })
                 } else {
@@ -150,9 +150,16 @@ macro_rules! impl_aligned_non_zero {
                 }
             }
 
-            pub const fn new_aligned_unchecked(value: $nonzero) -> Self {
+            pub const fn new_unchecked(value: $nonzero) -> Self {
                 Self {
                     inner: value,
+                    _alignment: PhantomData,
+                }
+            }
+
+            pub const unsafe fn new_unchecked_raw(value: $int) -> Self {
+                Self {
+                    inner: unsafe { <$nonzero>::new_unchecked(value) },
                     _alignment: PhantomData,
                 }
             }

@@ -1,5 +1,6 @@
 use core::arch::x86_64::__cpuid;
 use core::cmp::min;
+use core::hash::Hash;
 use core::sync::atomic::{AtomicU8, Ordering};
 use spin::Once;
 
@@ -22,7 +23,7 @@ fn phys_address_bits() -> u8 {
     BITS.load(Ordering::Relaxed)
 }
 
-pub trait AddrSpace: Clone + Copy + PartialEq + Eq + PartialOrd + Ord {
+pub trait AddrSpace: Clone + Copy + PartialEq + Eq + PartialOrd + Ord + Hash {
     fn bits() -> u8;
     fn mask() -> u64 {
         (1 << Self::bits()) - 1
@@ -31,7 +32,7 @@ pub trait AddrSpace: Clone + Copy + PartialEq + Eq + PartialOrd + Ord {
 
 pub type DefaultAddrSpace = Impl;
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Impl;
 
 impl AddrSpace for Impl {

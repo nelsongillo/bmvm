@@ -1,22 +1,17 @@
+use crate::mem::Align;
 use crate::mem::bits::{AddrSpace, DefaultAddrSpace};
 use core::fmt;
 use core::marker::PhantomData;
 use core::ops::{Add, AddAssign, Sub, SubAssign};
 
-/// Alias for consistent imports
-#[cfg(target_arch = "x86_64")]
-pub type VirtAddr = x86_64::VirtAddr;
-
 /// Limit the physical address range to the min(supported address bits, 48) bits.
-#[cfg(target_arch = "x86_64")]
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PhysAddr<B: AddrSpace = DefaultAddrSpace> {
     inner: u64,
     _bits: PhantomData<B>,
 }
 
-#[cfg(target_arch = "x86_64")]
 impl<B: AddrSpace> PhysAddr<B> {
     /// Creates a new physical address.
     ///
@@ -203,12 +198,191 @@ impl<B: AddrSpace> TryFrom<u64> for PhysAddr<B> {
     }
 }
 
-pub fn virt_to_phys<B: AddrSpace>(vaddr: VirtAddr) -> PhysAddr<B> {
-    let raw = vaddr.as_u64();
-    if raw & 1 << (48 - 1) == 0 {
-        PhysAddr::new(raw)
-    } else {
-        PhysAddr::new((raw & ((1 << 48) - 1)) >> (48 - B::bits()))
+impl<B: AddrSpace> From<VirtAddr> for PhysAddr<B> {
+    fn from(addr: VirtAddr) -> Self {
+        let raw = addr.as_u64();
+        if raw & 1 << (48 - 1) == 0 {
+            PhysAddr::new(raw)
+        } else {
+            PhysAddr::new((raw & ((1 << 48) - 1)) >> (48 - B::bits()))
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct VirtAddr(u64);
+
+const INDEX_MASK: u64 = 0x7F;
+
+impl VirtAddr {
+    #[inline]
+    pub const fn new(addr: u64) -> Self {
+        let virt = Self::new_truncate(addr);
+        if virt.as_u64() != addr {
+            panic!("virtual address must be sign extended in bits 48 to 64")
+        }
+
+        virt
+    }
+
+    /// Creates a new virtual address, removing bits 48 to 64 and sign extending bit 47
+    #[inline]
+    pub const fn new_truncate(addr: u64) -> VirtAddr {
+        VirtAddr(((addr << 16) as i64 >> 16) as u64)
+    }
+
+    /// Creates a new virtual address, without any checks.
+    #[inline]
+    pub const unsafe fn new_unsafe(addr: u64) -> VirtAddr {
+        VirtAddr(addr)
+    }
+
+    /// Converts the address to an `u64`.
+    #[inline]
+    pub const fn as_u64(self) -> u64 {
+        self.0
+    }
+
+    /// Aligns the virtual address upwards to the given alignment.
+    #[inline]
+    pub fn align_ceil<A>(self) -> Self
+    where
+        A: Align,
+    {
+        Self::new_truncate(A::align_ceil(self.0))
+    }
+
+    /// Aligns the virtual address downwards to the given alignment.
+    #[inline]
+    pub fn align_floor<A>(self) -> Self
+    where
+        A: Align,
+    {
+        Self::new_truncate(A::align_floor(self.0))
+    }
+
+    /// Checks whether the virtual address has the demanded alignment.
+    #[inline]
+    pub fn is_aligned<A>(self) -> bool
+    where
+        A: Align,
+    {
+        A::is_aligned(self.0)
+    }
+
+    /// Returns the 9-bit level 1 page table index.
+    #[inline]
+    pub const fn p1_index(self) -> usize {
+        ((self.0 >> 12) & INDEX_MASK) as usize
+    }
+
+    /// Returns the 9-bit level 2 page table index.
+    #[inline]
+    pub const fn p2_index(self) -> usize {
+        ((self.0 >> 12 >> 9) & INDEX_MASK) as usize
+    }
+
+    /// Returns the 9-bit level 3 page table index.
+    #[inline]
+    pub const fn p3_index(self) -> usize {
+        ((self.0 >> 12 >> 9 >> 9) & INDEX_MASK) as usize
+    }
+
+    /// Returns the 9-bit level 4 page table index.
+    #[inline]
+    pub const fn p4_index(self) -> usize {
+        ((self.0 >> 12 >> 9 >> 9 >> 9) & INDEX_MASK) as usize
+    }
+
+    pub fn from_ptr<T>(ptr: *const T) -> Self {
+        Self::new(ptr as *const () as u64)
+    }
+
+    #[inline]
+    pub const fn as_ptr<T>(self) -> *const T {
+        self.as_u64() as *const T
+    }
+}
+
+impl fmt::Debug for VirtAddr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_tuple("VirtAddr")
+            .field(&format_args!("{:#x}", self.0))
+            .finish()
+    }
+}
+
+impl fmt::Binary for VirtAddr {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Binary::fmt(&self.0, f)
+    }
+}
+
+impl fmt::LowerHex for VirtAddr {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::LowerHex::fmt(&self.0, f)
+    }
+}
+
+impl fmt::Octal for VirtAddr {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Octal::fmt(&self.0, f)
+    }
+}
+
+impl fmt::UpperHex for VirtAddr {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::UpperHex::fmt(&self.0, f)
+    }
+}
+
+impl fmt::Pointer for VirtAddr {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Pointer::fmt(&(self.0 as *const ()), f)
+    }
+}
+
+impl Add<u64> for VirtAddr {
+    type Output = Self;
+    #[inline]
+    fn add(self, rhs: u64) -> Self::Output {
+        VirtAddr::new(self.0 + rhs)
+    }
+}
+
+impl AddAssign<u64> for VirtAddr {
+    #[inline]
+    fn add_assign(&mut self, rhs: u64) {
+        *self = *self + rhs;
+    }
+}
+
+impl Sub<u64> for VirtAddr {
+    type Output = Self;
+    #[inline]
+    fn sub(self, rhs: u64) -> Self::Output {
+        VirtAddr::new(self.0.checked_sub(rhs).unwrap())
+    }
+}
+
+impl SubAssign<u64> for VirtAddr {
+    #[inline]
+    fn sub_assign(&mut self, rhs: u64) {
+        *self = *self - rhs;
+    }
+}
+
+impl Sub<VirtAddr> for VirtAddr {
+    type Output = u64;
+    #[inline]
+    fn sub(self, rhs: VirtAddr) -> Self::Output {
+        self.as_u64().checked_sub(rhs.as_u64()).unwrap()
     }
 }
 
@@ -259,9 +433,9 @@ mod tests {
     fn virt_to_phys_test() {
         // mask and shift
         let virt = unsafe { VirtAddr::new_unsafe(0xffff800000024600) };
-        assert_eq!(virt_to_phys::<AddrSpace39>(virt).as_u64(), 0x4000000123);
+        assert_eq!(PhysAddr::<AddrSpace39>::from(virt).as_u64(), 0x4000000123);
 
         let virt = unsafe { VirtAddr::new_unsafe(0x3000000123) };
-        assert_eq!(virt_to_phys::<AddrSpace39>(virt).as_u64(), 0x3000000123);
+        assert_eq!(PhysAddr::<AddrSpace39>::from(virt).as_u64(), 0x3000000123);
     }
 }

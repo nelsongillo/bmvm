@@ -1,3 +1,4 @@
+use crate::alloc::Error::InvalidAddress;
 use crate::alloc::{Accessible, GuestOnly, Perm, ReadOnly, ReadWrite, WriteOnly};
 use bmvm_common::mem::{Align, AlignedNonZeroUsize, Arena, DefaultAlign, PhysAddr};
 use core::ffi::c_void;
@@ -7,6 +8,8 @@ use kvm_bindings::{
 use kvm_ioctls::{Cap, VmFd};
 use nix::sys::mman::{MapFlags, ProtFlags, mmap_anonymous};
 use std::cmp::min;
+use std::fs::File;
+use std::io::Write;
 use std::marker::PhantomData;
 use std::ops::Range;
 use std::os::fd::RawFd;
@@ -26,6 +29,9 @@ pub enum Error {
     #[error("nix errno: {0}")]
     NixErrno(#[from] nix::errno::Errno),
 
+    #[error("io error: {0}")]
+    IOError(#[from] std::io::Error),
+
     #[error("invalid offset: {offset} (max: {max})")]
     InvalidOffset { offset: usize, max: usize },
 
@@ -37,6 +43,12 @@ pub enum Error {
         start: PhysAddr,
         size: usize,
     },
+
+    #[error("region for addr {0:x} not in collection")]
+    RegionNotFound(PhysAddr),
+
+    #[error("region at {0:x} is not readable")]
+    NotReadable(PhysAddr),
 
     #[error("failed to set region as user memory ({0:#x}): {1}")]
     RegionMappingFailed(PhysAddr, kvm_ioctls::Error),
@@ -166,6 +178,26 @@ impl RegionCollection {
 
     pub fn iter_mut(&mut self) -> RegionCollectionIterMut<'_> {
         RegionCollectionIterMut::new(self)
+    }
+
+    pub fn dump(&self, start: PhysAddr, size: usize, file: &mut File) -> Result<()> {
+        let mut current = start;
+        let mut requested = size;
+        while requested > 0 {
+            let reg = self.get(start).ok_or(Error::RegionNotFound(current))?;
+            let slice = reg.as_ref().ok_or(Error::NotReadable(current))?;
+            let dump = if slice.len() > requested {
+                &slice[..requested]
+            } else {
+                slice
+            };
+
+            file.write_all(dump)?;
+            requested -= dump.len();
+            current += dump.len() as u64;
+        }
+
+        Ok(())
     }
 }
 

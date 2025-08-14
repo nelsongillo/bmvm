@@ -4,23 +4,6 @@ use bmvm_common::mem::{Align, Arena, Flags, LayoutTable, Page4KiB};
 use bmvm_common::{BMVM_MEM_LAYOUT_TABLE, mem};
 use core::arch::asm;
 
-mod gdt;
-mod idt;
-mod paging;
-
-/// GDT requires 1 page
-pub const GDT_PAGE_REQ: u64 = 1;
-pub const GDT_SPACE_REQ: u64 = Page4KiB::ALIGNMENT * GDT_PAGE_REQ;
-
-/// IDT requires 1 page
-pub const IDT_PAGE_REQ: u64 = 1;
-pub const IDT_SPACE_REQ: u64 = Page4KiB::ALIGNMENT * IDT_PAGE_REQ;
-
-/// Pages to allocate for non-paging related structures in the sys memory region
-pub const NON_PAGING_PAGE_REQ: u64 = GDT_PAGE_REQ + IDT_PAGE_REQ;
-/// Bytes offset the paging structure by in the sys memory region
-pub const NON_PAGING_SPACE_REQ: u64 = GDT_SPACE_REQ + IDT_SPACE_REQ;
-
 // Define the I/O port to write to (example: 0x3F8 for COM1)
 pub(crate) const IO_PORT: u16 = 0x3f8;
 
@@ -45,14 +28,6 @@ pub fn setup() -> Result<(), ExitCode> {
         InterpretError::Misaligned(_, _) => ExitCode::InvalidMemoryLayoutTableMisaligned,
     })?;
 
-    // stage 1 -> Layout parsed
-    write(IO_PORT, 0);
-
-    let region_sys = table
-        .into_iter()
-        .find(|entry| entry.flags().contains(Flags::PRESENT | Flags::SYSTEM))
-        .ok_or(ExitCode::InvalidMemoryLayout)?;
-
     let region_vmi_foreign = table
         .into_iter()
         .find(|entry| {
@@ -74,27 +49,12 @@ pub fn setup() -> Result<(), ExitCode> {
     // stage 2 -> Layout parsed
     write(IO_PORT, 1);
 
-    // set up the paging structure
-    paging::setup(table, region_sys)?;
-
-    write(IO_PORT, 2);
-
-    // set up the Interrupt Table
-    idt::setup(&region_sys, 0)?;
-
-    // stage 3 -> IDT done
-    write(IO_PORT, 3);
-
-    // set up the Global Descriptor Table
-    gdt::setup(&region_sys, IDT_SPACE_REQ)?;
-
-    // stage 4 -> GDT done
-    write(IO_PORT, 4);
-
     // set up the allocator for the VMI
     let foreign = Arena::from(region_vmi_foreign);
     let owned = Arena::from(region_vmi_owned);
     mem::init(owned, foreign);
+
+    write(IO_PORT, 2);
 
     Ok(())
 }
