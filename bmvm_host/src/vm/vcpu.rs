@@ -1,5 +1,5 @@
 use crate::utils::Dirty;
-use crate::vm::setup::{GDT_ENTRY_SIZE, IDT_ENTRY_SIZE};
+use crate::vm::setup::{GDT_BASE, GDT_ENTRY_SIZE, GDT_LIMIT, IDT_ENTRY_SIZE};
 use bmvm_common::mem::{PhysAddr, VirtAddr};
 use kvm_bindings::{
     __u16, CpuId, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_SINGLESTEP, kvm_dtable, kvm_guest_debug,
@@ -31,6 +31,10 @@ type Result<T> = core::result::Result<T, Error>;
 
 /// CR0: Protection Enabled
 const CR0_PE: u64 = 1 << 0;
+/// CRO: Extention Type
+const CR0_ET: u64 = 1 << 4;
+/// CR0: Write Protect
+const CR0_WP: u64 = 1 << 16;
 /// CR0: Paging
 const CR0_PG: u64 = 1 << 31;
 
@@ -48,16 +52,17 @@ const CR4_PGE: u64 = 0x1 << 7;
 const EFER_LME: u64 = 0x1 << 8;
 /// Long Mode Active
 const EFER_LMA: u64 = 0x1 << 10;
+const EFER_NX: u64 = 0x1 << 11;
 
 pub struct Gdt {
-    pub addr: VirtAddr,
+    pub addr: PhysAddr,
     pub entries: usize,
     pub code: u16,
     pub data: u16,
 }
 
 pub struct Idt {
-    pub addr: VirtAddr,
+    pub addr: PhysAddr,
     pub entries: usize,
 }
 
@@ -198,15 +203,45 @@ impl Vcpu {
             };
 
             sregs.cs.selector = gdt.code * GDT_ENTRY_SIZE as u16;
-            sregs.cs.base = 0;
-            sregs.cs.limit = 0xF_FFFF;
+            sregs.cs.base = GDT_BASE;
+            sregs.cs.limit = GDT_LIMIT as u32;
+            sregs.cs.present = 1;
+            sregs.cs.type_ = 0xB;
+            sregs.cs.s = 1;
+            sregs.cs.dpl = 0;
+            sregs.cs.db = 0;
             sregs.cs.l = 1;
             sregs.cs.g = 1;
 
+            sregs.ss.selector = gdt.data * GDT_ENTRY_SIZE as u16;
+            sregs.ss.base = 0;
+            sregs.ss.limit = GDT_LIMIT as u32;
+            sregs.ss.present = 1;
+            sregs.ss.type_ = 0x2;
+            sregs.ss.s = 1;
+            sregs.ss.dpl = 0;
+            sregs.ss.l = 0;
+            sregs.ss.g = 1;
+
             sregs.ds.selector = gdt.data * GDT_ENTRY_SIZE as u16;
             sregs.ds.base = 0;
-            sregs.ds.limit = 0xF_FFFF;
-            sregs.ds.l = 1;
+            sregs.ds.limit = GDT_LIMIT as u32;
+            sregs.ds.present = 1;
+            sregs.ds.type_ = 0x2;
+            sregs.ds.s = 1;
+            sregs.ds.dpl = 0;
+            sregs.ds.l = 0;
+            sregs.ds.g = 1;
+
+            sregs.es.selector = gdt.data * GDT_ENTRY_SIZE as u16;
+            sregs.es.base = 0;
+            sregs.es.limit = GDT_LIMIT as u32;
+            sregs.es.present = 1;
+            sregs.es.type_ = 0x2;
+            sregs.es.s = 1;
+            sregs.es.dpl = 0;
+            sregs.es.l = 0;
+            sregs.es.g = 1;
 
             true
         });
@@ -236,13 +271,13 @@ impl Vcpu {
 
         self.sregs.mutate(|sregs| {
             // enable protected mode and paging
-            sregs.cr0 = CR0_PE | CR0_PG;
+            sregs.cr0 = CR0_PE | CR0_PG | CR0_ET | CR0_WP;
             // set the paging address
             sregs.cr3 = addr.as_u64();
-            // set DEbug, and Physical-Address Extension, Page-Global Enable
+            // set Debug, and Physical-Address Extension, Page-Global Enable
             sregs.cr4 = CR4_DE | CR4_PSE | CR4_PAE | CR4_PGE;
             // set Long-Mode Active and Long-Mode Enabled
-            sregs.efer |= EFER_LMA | EFER_LME;
+            sregs.efer |= EFER_LMA | EFER_LME | EFER_NX;
             true
         });
 
@@ -251,6 +286,13 @@ impl Vcpu {
 
     /// set up other execution relevant registers besides the structures required for long mode
     fn setup_execution(&mut self, stack: VirtAddr, entry: VirtAddr) -> Result<()> {
+        log::debug!(
+            "Setting up execution - Stack: {:x} ({}) Entry: {:x}",
+            stack,
+            stack.as_u64(),
+            entry
+        );
+
         self.refresh_regs()?;
 
         self.regs.mutate(|regs| {

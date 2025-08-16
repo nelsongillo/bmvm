@@ -16,7 +16,7 @@ pub fn aligned_and_fits<A: Align>(from: u64, to: u64) -> bool {
         return false;
     }
 
-    A::is_aligned(from) && to - from >= A::ALIGNMENT
+    A::is_aligned(from) && to + 1 - from >= A::ALIGNMENT
 }
 
 mod tests {
@@ -30,7 +30,7 @@ mod tests {
 
     #[test]
     fn aligned_but_not_enough_space() {
-        assert!(!aligned_and_fits::<Page4KiB>(0x1000, 0x1FFF));
+        assert!(aligned_and_fits::<Page4KiB>(0x1000, 0x1FFF));
     }
 
     #[test]

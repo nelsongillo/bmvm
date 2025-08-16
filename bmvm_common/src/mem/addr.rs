@@ -1,3 +1,5 @@
+///! Disclaimer: The code for `PhysAddr` and `VirtAddr` are heavily inspired by the
+///! x86_64 crate (https://crates.io/crates/x86_64)
 use crate::mem::Align;
 use crate::mem::bits::{AddrSpace, DefaultAddrSpace};
 use core::fmt;
@@ -213,7 +215,7 @@ impl<B: AddrSpace> From<VirtAddr> for PhysAddr<B> {
 #[repr(transparent)]
 pub struct VirtAddr(u64);
 
-const INDEX_MASK: u64 = 0x7F;
+const INDEX_MASK: u64 = 0b1_1111_1111;
 
 impl VirtAddr {
     #[inline]

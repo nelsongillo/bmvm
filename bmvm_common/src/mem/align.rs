@@ -103,6 +103,12 @@ impl Align for Page1GiB {
     const ALIGNMENT: u64 = Page2MiB::ALIGNMENT * 512;
 }
 
+#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Stack;
+impl Align for Stack {
+    const ALIGNMENT: u64 = 16;
+}
+
 /// Aligned non-zero integer wrapper
 #[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]

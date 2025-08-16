@@ -1,10 +1,10 @@
 use crate::alloc::{Allocator, ReadWrite, Region};
 use bmvm_common::mem::{
     Align, AlignedNonZeroUsize, Flags, LayoutTableEntry, Page1GiB, Page2MiB, Page4KiB, PhysAddr,
-    aligned_and_fits,
+    VirtAddr, aligned_and_fits,
 };
 use std::collections::HashMap;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::num::NonZeroUsize;
 use std::slice;
 
@@ -88,6 +88,7 @@ impl<'a> PagingArena<'a> {
         })
     }
 
+    /// Try fetching the table at a given address
     fn table_at(&self, addr: PhysAddr) -> Option<&mut [u8]> {
         // If we have a page for this address, return it
         if let Some(page) = self.pages.get(&addr) {
@@ -104,11 +105,21 @@ impl<'a> PagingArena<'a> {
         None
     }
 
+    /// Create a new child table for the parent at an index with the given flags.
+    ///
+    /// # Parameter
+    /// * parent: The address of the parent table (here the new entry for the child will be written)
+    /// * idx: the index to write the child entry to
+    /// * flags: Write/Execute permission for the child
+    ///
+    /// # Returns
+    /// Result containing the physical address of the newly created child table.
     fn child(&mut self, parent: PhysAddr, idx: usize, flags: Flags) -> Result<PhysAddr> {
+        // address to create the child table at
         let addr = self.next_addr;
         self.next_addr += Page4KiB::ALIGNMENT;
 
-        // Otherwise, allocate a new page or get page from already allocated region
+        // if no more pages are available, allocate a new region
         if self.remaining == 0 {
             let on_demand =
                 AlignedNonZeroUsize::new_aligned(self.on_demand * Page4KiB::ALIGNMENT as usize)
@@ -123,6 +134,7 @@ impl<'a> PagingArena<'a> {
             self.remaining = self.on_demand;
         }
 
+        // update the arena allocator
         self.remaining -= 1;
         self.offset += 1;
         self.pages.insert(
@@ -133,10 +145,11 @@ impl<'a> PagingArena<'a> {
             },
         );
 
+        // write the entry to the parent table
         let parent_table = self
             .table_at(parent)
             .ok_or(Error::NoRegionForAddr(parent))?;
-        let entry = PageEntry::new(addr, false, flags);
+        let entry = PageEntry::new(addr.as_u64(), false, flags);
         write_at(parent_table, idx, entry)?;
 
         Ok(addr)
@@ -152,10 +165,10 @@ impl<'a> PagingArena<'a> {
 struct PageEntry(u64);
 
 impl PageEntry {
-    fn new(addr: PhysAddr, huge: bool, flags: Flags) -> Self {
-        assert!(Page4KiB::is_aligned(addr.as_u64()));
+    fn new(addr: u64, huge: bool, flags: Flags) -> Self {
+        assert!(Page4KiB::is_aligned(addr));
         let mut entry: u64 = PAGE_FLAG_PRESENT;
-        entry |= addr.as_u64() & ADDR_MASK;
+        entry |= addr & ADDR_MASK;
 
         if huge {
             entry |= PAGE_FLAG_HUGE;
@@ -210,8 +223,8 @@ impl PageEntry {
         self.0 & PAGE_FLAG_NOT_EXECUTABLE == 0
     }
 
-    fn addr(&self) -> PhysAddr {
-        PhysAddr::new(self.0 & ADDR_MASK)
+    fn addr(&self) -> u64 {
+        self.0 & ADDR_MASK
     }
 
     const fn to_ne_bytes(self) -> [u8; 8] {
@@ -222,6 +235,20 @@ impl PageEntry {
 impl From<u64> for PageEntry {
     fn from(entry: u64) -> Self {
         Self(entry)
+    }
+}
+
+impl Display for PageEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Present: {}, Huge: {}, Write: {}, Exec: {}, Addr: {:x}",
+            self.present(),
+            self.huge(),
+            self.write(),
+            self.exec(),
+            self.addr()
+        )
     }
 }
 
@@ -236,42 +263,48 @@ pub(super) fn setup(
     let mut arena = PagingArena::new(allocator, pml4, initial, on_demand)?;
 
     for layout_entry in entries.iter() {
-        let mut addr = layout_entry.addr();
-        let end = addr + layout_entry.size();
+        let mut addr = layout_entry.addr().as_virt_addr();
+        let end = addr + layout_entry.size() - 1;
         let flags = layout_entry.flags();
-
+        log::info!(
+            "Mapping {:x} - {:x} with flags {:?}",
+            addr.as_u64(),
+            end.as_u64(),
+            flags
+        );
         while addr < end {
-            let addr_virt = addr.as_virt_addr();
-
             match () {
                 _ if aligned_and_fits::<Page1GiB>(addr.as_u64(), end.as_u64()) => {
-                    let pdpt = write_idx(&mut arena, addr, pml4, addr_virt.p4_index(), flags)?;
+                    log::debug!("Mapping 1GiB page at {:x}", addr.as_u64());
+                    let pdpt = write_idx(&mut arena, addr, pml4, addr.p4_index(), flags)?;
 
                     // Handle leaf entry
                     let table = arena.table_at(pdpt).ok_or(Error::NoRegionForAddr(pdpt))?;
-                    let entry = PageEntry::new(addr, true, flags);
-                    write_at(table, addr_virt.p3_index(), entry)?;
+                    let entry = PageEntry::new(addr.as_u64(), true, flags);
+                    write_at(table, addr.p3_index(), entry)?;
                     addr += Page1GiB::ALIGNMENT;
                 }
                 _ if aligned_and_fits::<Page2MiB>(addr.as_u64(), end.as_u64()) => {
-                    let pdpt = write_idx(&mut arena, addr, pml4, addr_virt.p4_index(), flags)?;
-                    let pd = write_idx(&mut arena, addr, pdpt, addr_virt.p3_index(), flags)?;
+                    log::debug!("Mapping 2MiB page at {:x}", addr.as_u64());
+                    let pdpt = write_idx(&mut arena, addr, pml4, addr.p4_index(), flags)?;
+                    let pd = write_idx(&mut arena, addr, pdpt, addr.p3_index(), flags)?;
 
                     // Handle leaf entry
                     let table = arena.table_at(pd).ok_or(Error::NoRegionForAddr(pd))?;
-                    let entry = PageEntry::new(addr, true, flags);
-                    write_at(table, addr_virt.p2_index(), entry)?;
+                    let entry = PageEntry::new(addr.as_u64(), true, flags);
+                    write_at(table, addr.p2_index(), entry)?;
                     addr += Page2MiB::ALIGNMENT;
                 }
                 _ => {
-                    let pdpt = write_idx(&mut arena, addr, pml4, addr_virt.p4_index(), flags)?;
-                    let pd = write_idx(&mut arena, addr, pdpt, addr_virt.p3_index(), flags)?;
-                    let pt = write_idx(&mut arena, addr, pd, addr_virt.p2_index(), flags)?;
+                    log::debug!("Mapping 4KiB page at {:x}", addr.as_u64());
+                    let pdpt = write_idx(&mut arena, addr, pml4, addr.p4_index(), flags)?;
+                    let pd = write_idx(&mut arena, addr, pdpt, addr.p3_index(), flags)?;
+                    let pt = write_idx(&mut arena, addr, pd, addr.p2_index(), flags)?;
 
                     // Handle leaf entry
                     let table = arena.table_at(pt).ok_or(Error::NoRegionForAddr(pt))?;
-                    let entry = PageEntry::new(addr, false, flags);
-                    write_at(table, addr_virt.p1_index(), entry)?;
+                    let entry = PageEntry::new(addr.as_u64(), false, flags);
+                    write_at(table, addr.p1_index(), entry)?;
                     addr += Page4KiB::ALIGNMENT;
                 }
             }
@@ -293,8 +326,11 @@ fn get_at(table: &[u8], idx: usize) -> Result<PageEntry> {
     )))
 }
 
+/// Write a page entry to the table at the given index.
 #[inline]
 fn write_at(table: &mut [u8], idx: usize, entry: PageEntry) -> Result<()> {
+    log::debug!("Index: {idx} - Entry {entry}");
+
     let offset = idx * size_of::<PageEntry>();
     if offset + size_of::<u64>() > table.len() {
         return Err(Error::IndexOutOfBounds(idx));
@@ -303,9 +339,13 @@ fn write_at(table: &mut [u8], idx: usize, entry: PageEntry) -> Result<()> {
     Ok(())
 }
 
+/// Write a page entry to the table at the given index which points to a child table. If the entry
+/// is not present, the child table should be initialized in addition to writing the parent table
+/// entry. If the Entry was previously present, and the flags do not grant more permissions than
+/// previously set, this function is a no-op regarding parent page modification.
 fn write_idx(
     arena: &mut PagingArena,
-    addr_target: PhysAddr,
+    addr_target: VirtAddr,
     addr_table: PhysAddr,
     idx: usize,
     flags: Flags,
@@ -317,7 +357,7 @@ fn write_idx(
     let mut entry = get_at(table, idx)?;
 
     if entry.present() && entry.huge() {
-        return Err(Error::Overlapping(addr_target));
+        return Err(Error::Overlapping(PhysAddr::from(addr_target)));
     }
 
     if !entry.present() {
@@ -329,11 +369,13 @@ fn write_idx(
     // Update the permissions to the most permissive.
     if !entry.exec() && flags.is_code() {
         entry.set_exec(true);
+        log::debug!("Modified: EXEC");
         modified = true;
     }
     // Update the permissions to the most permissive.
     if !entry.write() && flags.is_write() {
         entry.set_write(true);
+        log::debug!("Modified: WRITE");
         modified = true;
     }
 
@@ -341,5 +383,5 @@ fn write_idx(
         write_at(table, idx, entry)?;
     }
 
-    Ok(entry.addr())
+    Ok(PhysAddr::new(entry.addr()))
 }

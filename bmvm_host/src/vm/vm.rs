@@ -6,15 +6,16 @@ use crate::vm::setup::{GDT_PAGE_REQUIRED, GDT_SIZE, IDT_PAGE_REQUIRED, IDT_SIZE}
 use crate::vm::vcpu::Vcpu;
 use crate::vm::{Config, paging, registry, setup, vcpu};
 use crate::{GUEST_PAGING_ADDR, GUEST_STACK_ADDR, GUEST_SYSTEM_ADDR};
-use bmvm_common::HYPERCALL_IO_PORT;
 use bmvm_common::error::ExitCode;
+use bmvm_common::interprete::Interpret;
 use bmvm_common::mem;
 use bmvm_common::mem::{
-    Align, AlignedNonZeroUsize, DefaultAddrSpace, DefaultAlign, Flags, LayoutTableEntry, Page4KiB,
-    PhysAddr, VirtAddr, align_floor, init as init_vmi_alloc,
+    Align, AlignedNonZeroUsize, DefaultAddrSpace, DefaultAlign, Flags, LayoutTable,
+    LayoutTableEntry, Page4KiB, PhysAddr, Stack, VirtAddr, align_floor, init as init_vmi_alloc,
 };
 use bmvm_common::registry::Params;
 use bmvm_common::vmi::{ForeignShareable, Transport};
+use bmvm_common::{BMVM_MEM_LAYOUT_TABLE, HYPERCALL_IO_PORT};
 use kvm_bindings::KVM_API_VERSION;
 use kvm_ioctls::{Cap, Kvm, VcpuExit, VmFd};
 use std::io::Write;
@@ -403,7 +404,7 @@ impl Vm {
         &mut self,
         exec: &mut ExecBundle,
     ) -> Result<(PhysAddr, PhysAddr, PhysAddr)> {
-        // allocate a region for the temporary system structures
+        // allocate a region for the system structures
         let size_sys = AlignedNonZeroUsize::new_ceil((IDT_SIZE + GDT_SIZE) as usize).unwrap();
         let mut sys_region = self
             .manager
@@ -421,6 +422,16 @@ impl Vm {
             Flags::PRESENT | Flags::DATA_WRITE,
         ));
 
+        // Empty init the layout region
+        let layout = AlignedNonZeroUsize::new_aligned(Page4KiB::ALIGNMENT as usize).unwrap();
+        let mut layout_region = self
+            .manager
+            .alloc_accessible::<ReadWrite>(layout)?
+            .set_guest_addr(BMVM_MEM_LAYOUT_TABLE);
+        let layout_entry =
+            LayoutTableEntry::new(BMVM_MEM_LAYOUT_TABLE, 1, Flags::PRESENT | Flags::DATA_READ);
+        exec.layout.push(layout_entry);
+
         // setup the paging structure
         let regions = paging::setup(
             &self.manager,
@@ -429,6 +440,13 @@ impl Vm {
             NonZeroUsize::new(INITIAL_PAGE_ALLOC).unwrap(),
             NonZeroUsize::new(ADDITIONAL_PAGE_ALLOC).unwrap(),
         )?;
+
+        // fill the layout table with the allocated regions
+        let table = LayoutTable::from_mut_bytes(layout_region.as_mut()).unwrap();
+        for (i, e) in exec.layout.iter().enumerate() {
+            table.entries[i] = e.clone();
+        }
+        self.mem_mappings.push(layout_region);
 
         let mut paging_size = 0;
         for r in regions {
@@ -454,17 +472,17 @@ impl Vm {
     ) -> Result<()> {
         let setup = vcpu::Setup {
             gdt: vcpu::Gdt {
-                addr: gdt.as_virt_addr(),
+                addr: gdt,
                 entries: 3,
                 code: 1,
                 data: 2,
             },
             idt: vcpu::Idt {
-                addr: idt.as_virt_addr(),
+                addr: idt,
                 entries: 0,
             },
-            paging: paging,
-            stack: GUEST_STACK_ADDR().as_virt_addr() - 1,
+            paging,
+            stack: (GUEST_STACK_ADDR().as_virt_addr() - 1).align_floor::<Stack>(),
             entry: entry_point,
             cpu_id: setup::cpuid(&self.kvm)?,
         };
@@ -494,7 +512,7 @@ impl Vm {
 
         // Print registers before getting memory to avoid borrow conflict
         log::info!("registers -> {:?}", regs);
-        // log::debug!("special registers -> {:?}", sregs);
+        log::debug!("Paging Ptr -> {:?}", sregs.cr3);
 
         if cr2 != 0 {
             log::info!("PAGE FAULT at: cr2 -> {:#x}", cr2);
@@ -510,6 +528,14 @@ impl Vm {
     }
 
     fn dump_paging(&self) -> Result<()> {
+        let mut file =
+            std::fs::File::create(format!("dump_layout_{:x}.bin", BMVM_MEM_LAYOUT_TABLE)).unwrap();
+        self.mem_mappings.dump(
+            BMVM_MEM_LAYOUT_TABLE,
+            Page4KiB::ALIGNMENT as usize,
+            &mut file,
+        )?;
+
         let mut file =
             std::fs::File::create(format!("dump_paging_{:x}.bin", GUEST_PAGING_ADDR())).unwrap();
         self.mem_mappings
