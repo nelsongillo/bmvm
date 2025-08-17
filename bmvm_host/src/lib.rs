@@ -37,10 +37,6 @@ pub(crate) const DEFAULT_SHARED_GUEST: usize = 8 * 1024 * 1024;
 /// The default shared memory size owned by the host (8MiB)
 pub(crate) const DEFAULT_SHARED_HOST: usize = 8 * 1024 * 1024;
 
-/// The beginning of the .text segment should be at least 0x400000. This is similar to the x86_64
-/// convention (https://refspecs.linuxfoundation.org/elf/x86_64-abi-0.99.pdf).
-pub(crate) const MIN_TEXT_SEGMENT: u64 = 0x400000;
-
 static ONCE_GUEST_SYSTEM_ADDR: OnceLock<PhysAddr> = OnceLock::new();
 static ONCE_GUEST_PAGING_ADDR: OnceLock<PhysAddr> = OnceLock::new();
 static ONCE_GUEST_STACK_ADDR: OnceLock<PhysAddr> = OnceLock::new();

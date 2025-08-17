@@ -236,7 +236,7 @@ impl VirtAddr {
 
     /// Creates a new virtual address, without any checks.
     #[inline]
-    pub const unsafe fn new_unsafe(addr: u64) -> VirtAddr {
+    pub const fn new_unchecked(addr: u64) -> VirtAddr {
         VirtAddr(addr)
     }
 
@@ -304,6 +304,10 @@ impl VirtAddr {
     #[inline]
     pub const fn as_ptr<T>(self) -> *const T {
         self.as_u64() as *const T
+    }
+
+    pub const fn as_mut_ptr<T>(self) -> *mut T {
+        self.as_u64() as *mut T
     }
 }
 
@@ -434,10 +438,10 @@ mod tests {
     #[test]
     fn virt_to_phys_test() {
         // mask and shift
-        let virt = unsafe { VirtAddr::new_unsafe(0xffff800000024600) };
+        let virt = unsafe { VirtAddr::new_unchecked(0xffff800000024600) };
         assert_eq!(PhysAddr::<AddrSpace39>::from(virt).as_u64(), 0x4000000123);
 
-        let virt = unsafe { VirtAddr::new_unsafe(0x3000000123) };
+        let virt = unsafe { VirtAddr::new_unchecked(0x3000000123) };
         assert_eq!(PhysAddr::<AddrSpace39>::from(virt).as_u64(), 0x3000000123);
     }
 }

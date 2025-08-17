@@ -70,6 +70,7 @@ fn main() -> anyhow::Result<()> {
     foo.0.b = 0xbeef;
     let shared_foo = owned_foo.into_shared();
 
-    let _ = module.call::<FooParams, FooResult>(FUNC_FOO, (1312, shared_foo))?;
+    let buf = module.call::<FooParams, FooResult>(FUNC_FOO, (1312, shared_foo))?;
+    log::info!("Result of FOO: {:?}", buf.as_ref());
     Ok(())
 }

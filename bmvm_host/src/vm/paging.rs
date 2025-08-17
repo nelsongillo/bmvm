@@ -45,13 +45,14 @@ pub struct Page {
 
 pub struct PagingArena<'a> {
     allocator: &'a Allocator,
-    regions: Vec<Region<ReadWrite>>,
+    regions: Vec<Region<ReadWrite>>, // (region, has been self mapped)
     pages: HashMap<PhysAddr, Page>,
     current: usize,
     offset: usize,
     remaining: usize,
     on_demand: usize,
     next_addr: PhysAddr,
+    mapped_region_offset: usize,
 }
 
 impl<'a> PagingArena<'a> {
@@ -85,6 +86,7 @@ impl<'a> PagingArena<'a> {
             remaining: initial.get(),
             on_demand: on_demand.get(),
             next_addr: pml4 + Page4KiB::ALIGNMENT,
+            mapped_region_offset: 0,
         })
     }
 
@@ -155,6 +157,23 @@ impl<'a> PagingArena<'a> {
         Ok(addr)
     }
 
+    /// Get the LayoutTableEntries for all unmapped regions
+    fn layout(&mut self) -> Vec<LayoutTableEntry> {
+        let mut layout = Vec::new();
+        for region in self.regions.iter().skip(self.mapped_region_offset) {
+            layout.push(
+                LayoutTableEntry::empty()
+                    .set_paddr(region.addr())
+                    .set_vaddr(region.addr().as_virt_addr())
+                    .set_len((region.capacity().get() / Page4KiB::ALIGNMENT as usize) as u32)
+                    .set_flags(Flags::PRESENT | Flags::DATA_READ),
+            )
+        }
+        self.mapped_region_offset = self.regions.len();
+
+        layout
+    }
+
     fn into_regions(self) -> Vec<Region<ReadWrite>> {
         self.regions
     }
@@ -199,12 +218,6 @@ impl PageEntry {
         } else {
             self.0 |= PAGE_FLAG_NOT_EXECUTABLE;
         }
-    }
-
-    fn set_addr(&mut self, addr: PhysAddr) {
-        assert!(Page4KiB::is_aligned(addr.as_u64()));
-        self.0 &= !ADDR_MASK;
-        self.0 |= addr.as_u64() & ADDR_MASK;
     }
 
     const fn present(&self) -> bool {
@@ -262,56 +275,74 @@ pub(super) fn setup(
 ) -> Result<Vec<Region<ReadWrite>>> {
     let mut arena = PagingArena::new(allocator, pml4, initial, on_demand)?;
 
+    // Map the layout table
+    setup_impl(&mut arena, entries, pml4)?;
+
+    // Map the paging tables as well
+    let mut arena_layout = arena.layout();
+    while arena_layout.len() > 0 {
+        log::debug!("Mapping {} paging tables", arena_layout.len());
+        setup_impl(&mut arena, entries, pml4)?;
+        arena_layout = arena.layout();
+    }
+
+    Ok(arena.into_regions())
+}
+
+fn setup_impl(
+    mut arena: &mut PagingArena,
+    entries: &[LayoutTableEntry],
+    pml4: PhysAddr,
+) -> Result<()> {
     for layout_entry in entries.iter() {
-        let mut addr = layout_entry.addr().as_virt_addr();
-        let end = addr + layout_entry.size() - 1;
+        let mut paddr = layout_entry.paddr();
+        let mut vaddr = layout_entry.vaddr();
+        let end = vaddr + layout_entry.size() - 1;
         let flags = layout_entry.flags();
-        log::info!(
-            "Mapping {:x} - {:x} with flags {:?}",
-            addr.as_u64(),
-            end.as_u64(),
-            flags
-        );
-        while addr < end {
+        log::debug!("Mapping Phys {paddr:X} to {vaddr:X} - {end:x} with flags {flags:?}",);
+        while vaddr < end {
             match () {
-                _ if aligned_and_fits::<Page1GiB>(addr.as_u64(), end.as_u64()) => {
-                    log::debug!("Mapping 1GiB page at {:x}", addr.as_u64());
-                    let pdpt = write_idx(&mut arena, addr, pml4, addr.p4_index(), flags)?;
+                _ if aligned_and_fits::<Page1GiB>(vaddr.as_u64(), end.as_u64()) => {
+                    // log::debug!("Mapping 1GiB page at {:x}", vaddr.as_u64());
+                    let pdpt = write_idx(&mut arena, paddr, pml4, vaddr.p4_index(), flags)?;
 
                     // Handle leaf entry
                     let table = arena.table_at(pdpt).ok_or(Error::NoRegionForAddr(pdpt))?;
-                    let entry = PageEntry::new(addr.as_u64(), true, flags);
-                    write_at(table, addr.p3_index(), entry)?;
-                    addr += Page1GiB::ALIGNMENT;
+                    let entry = PageEntry::new(paddr.as_u64(), true, flags);
+                    write_at(table, vaddr.p3_index(), entry)?;
+                    paddr += Page1GiB::ALIGNMENT;
+                    vaddr += Page1GiB::ALIGNMENT;
                 }
-                _ if aligned_and_fits::<Page2MiB>(addr.as_u64(), end.as_u64()) => {
-                    log::debug!("Mapping 2MiB page at {:x}", addr.as_u64());
-                    let pdpt = write_idx(&mut arena, addr, pml4, addr.p4_index(), flags)?;
-                    let pd = write_idx(&mut arena, addr, pdpt, addr.p3_index(), flags)?;
+                _ if aligned_and_fits::<Page2MiB>(vaddr.as_u64(), end.as_u64()) => {
+                    // log::debug!("Mapping 2MiB page at {:x}", vaddr.as_u64());
+                    let pdpt = write_idx(&mut arena, paddr, pml4, vaddr.p4_index(), flags)?;
+                    let pd = write_idx(&mut arena, paddr, pdpt, vaddr.p3_index(), flags)?;
 
                     // Handle leaf entry
                     let table = arena.table_at(pd).ok_or(Error::NoRegionForAddr(pd))?;
-                    let entry = PageEntry::new(addr.as_u64(), true, flags);
-                    write_at(table, addr.p2_index(), entry)?;
-                    addr += Page2MiB::ALIGNMENT;
+                    let entry = PageEntry::new(paddr.as_u64(), true, flags);
+                    write_at(table, vaddr.p2_index(), entry)?;
+                    paddr += Page2MiB::ALIGNMENT;
+                    vaddr += Page2MiB::ALIGNMENT;
                 }
                 _ => {
-                    log::debug!("Mapping 4KiB page at {:x}", addr.as_u64());
-                    let pdpt = write_idx(&mut arena, addr, pml4, addr.p4_index(), flags)?;
-                    let pd = write_idx(&mut arena, addr, pdpt, addr.p3_index(), flags)?;
-                    let pt = write_idx(&mut arena, addr, pd, addr.p2_index(), flags)?;
+                    // log::debug!("Mapping 4KiB page at {:x}", vaddr.as_u64());
+                    let pdpt = write_idx(&mut arena, paddr, pml4, vaddr.p4_index(), flags)?;
+                    let pd = write_idx(&mut arena, paddr, pdpt, vaddr.p3_index(), flags)?;
+                    let pt = write_idx(&mut arena, paddr, pd, vaddr.p2_index(), flags)?;
 
                     // Handle leaf entry
                     let table = arena.table_at(pt).ok_or(Error::NoRegionForAddr(pt))?;
-                    let entry = PageEntry::new(addr.as_u64(), false, flags);
-                    write_at(table, addr.p1_index(), entry)?;
-                    addr += Page4KiB::ALIGNMENT;
+                    let entry = PageEntry::new(paddr.as_u64(), false, flags);
+                    write_at(table, vaddr.p1_index(), entry)?;
+                    paddr += Page4KiB::ALIGNMENT;
+                    vaddr += Page4KiB::ALIGNMENT;
                 }
             }
         }
     }
 
-    Ok(arena.into_regions())
+    Ok(())
 }
 
 #[inline]
@@ -345,7 +376,7 @@ fn write_at(table: &mut [u8], idx: usize, entry: PageEntry) -> Result<()> {
 /// previously set, this function is a no-op regarding parent page modification.
 fn write_idx(
     arena: &mut PagingArena,
-    addr_target: VirtAddr,
+    addr_target: PhysAddr,
     addr_table: PhysAddr,
     idx: usize,
     flags: Flags,
@@ -357,7 +388,7 @@ fn write_idx(
     let mut entry = get_at(table, idx)?;
 
     if entry.present() && entry.huge() {
-        return Err(Error::Overlapping(PhysAddr::from(addr_target)));
+        return Err(Error::Overlapping(addr_target));
     }
 
     if !entry.present() {
@@ -369,13 +400,11 @@ fn write_idx(
     // Update the permissions to the most permissive.
     if !entry.exec() && flags.is_code() {
         entry.set_exec(true);
-        log::debug!("Modified: EXEC");
         modified = true;
     }
     // Update the permissions to the most permissive.
     if !entry.write() && flags.is_write() {
         entry.set_write(true);
-        log::debug!("Modified: WRITE");
         modified = true;
     }
 

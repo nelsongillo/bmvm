@@ -2,7 +2,7 @@ use crate::alloc::*;
 
 use bmvm_common::mem::{
     Align, AlignedNonZeroUsize, DefaultAlign, Flags, LayoutTableEntry, MAX_REGION_SIZE, PhysAddr,
-    align_ceil, align_floor,
+    VirtAddr, align_ceil, align_floor,
 };
 use bmvm_common::vmi::{Error as VmiError, FnCall, UpcallFn};
 use bmvm_common::{
@@ -286,11 +286,11 @@ impl ExecBundle {
                     });
                 }
 
-                return Ok(LayoutTableEntry::new(
-                    PhysAddr::new(p_start),
-                    (allocated_size / DefaultAlign::ALIGNMENT) as u32,
-                    flags | Flags::PRESENT,
-                ));
+                return Ok(LayoutTableEntry::empty()
+                    .set_paddr(PhysAddr::new(p_start))
+                    .set_vaddr(VirtAddr::new_truncate(p_start))
+                    .set_len((allocated_size / DefaultAlign::ALIGNMENT) as u32)
+                    .set_flags(flags | Flags::PRESENT));
             }
         }
 

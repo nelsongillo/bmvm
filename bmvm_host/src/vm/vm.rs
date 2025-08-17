@@ -10,8 +10,9 @@ use bmvm_common::error::ExitCode;
 use bmvm_common::interprete::Interpret;
 use bmvm_common::mem;
 use bmvm_common::mem::{
-    Align, AlignedNonZeroUsize, DefaultAddrSpace, DefaultAlign, Flags, LayoutTable,
-    LayoutTableEntry, Page4KiB, PhysAddr, Stack, VirtAddr, align_floor, init as init_vmi_alloc,
+    Align, AlignedNonZeroU64, AlignedNonZeroUsize, DefaultAddrSpace, DefaultAlign, Flags,
+    LayoutTable, LayoutTableEntry, Page1GiB, Page2MiB, Page4KiB, PhysAddr, Stack, VirtAddr,
+    align_floor, init as init_vmi_alloc,
 };
 use bmvm_common::registry::Params;
 use bmvm_common::vmi::{ForeignShareable, Transport};
@@ -138,22 +139,8 @@ impl Vm {
 
         // allocate shared memory managed by the guest and host
         // Memory layout: sys | stack | shared_guest | shared_host | ... | code
-        let guest_addr = PhysAddr::new(
-            AlignedNonZeroUsize::<DefaultAlign>::new_floor(
-                stack_addr.as_usize() - self.cfg.shared_guest.get(),
-            )
-            .unwrap()
-            .get() as u64,
-        );
-        let host_addr = PhysAddr::new(
-            AlignedNonZeroUsize::<DefaultAlign>::new_floor(
-                guest_addr.as_usize() - self.cfg.shared_guest.get(),
-            )
-            .unwrap()
-            .get() as u64,
-        );
-        let (shared_guest, shared_guest_entry) = self.alloc_shared_guest(guest_addr)?;
-        let (shared_host, shared_host_entry) = self.alloc_shared_host(host_addr)?;
+        let (shared_guest, shared_guest_entry) = self.alloc_shared_guest(stack_addr)?;
+        let (shared_host, shared_host_entry) = self.alloc_shared_host(shared_guest.addr())?;
         // initialize the respective allocators
         let owned = shared_host.as_arena();
         let foreign = shared_guest.as_arena();
@@ -271,14 +258,14 @@ impl Vm {
 // Implementation regarding the guest-host interaction
 impl Vm {
     /// Setup the guest environment to execute the upcall
-    pub fn upcall_exec_setup<P, R>(&mut self, func: &'static str, params: P) -> Result<()>
+    pub fn upcall_exec_setup<P, R>(&mut self, name: &'static str, params: P) -> Result<()>
     where
         P: Params,
         R: ForeignShareable,
     {
         let func = self
             .upcalls
-            .find_upcall::<P, R>(func)
+            .find_upcall::<P, R>(name)
             .map_err(Error::UpcallInitError)?;
 
         let transport = params.into_transport().map_err(Error::UpcallExecError)?;
@@ -290,6 +277,7 @@ impl Vm {
 
             // Set the function pointer
             regs.rip = func.ptr().unwrap().as_u64();
+            log::info!("Calling function '{name}' at {:#x}", regs.rip);
             true
         })?;
 
@@ -340,6 +328,16 @@ impl Vm {
 
 // Implementation regarding initial setup
 impl Vm {
+    fn align_by_ref(value: u64, reference: u64) -> AlignedNonZeroU64 {
+        if Page1GiB::is_aligned(reference) {
+            AlignedNonZeroU64::new_aligned(Page1GiB::align_floor(value)).unwrap()
+        } else if Page2MiB::is_aligned(reference) {
+            AlignedNonZeroU64::new_aligned(Page2MiB::align_floor(value)).unwrap()
+        } else {
+            AlignedNonZeroU64::new_aligned(Page4KiB::align_floor(value)).unwrap()
+        }
+    }
+
     /// allocate memory for the stack
     fn alloc_stack(
         &mut self,
@@ -353,11 +351,13 @@ impl Vm {
 
         // stack grows downwards -> mount address is at the top of the stack
         let guest_addr = align_floor((base - capacity.get() as u64).as_u64());
-        let stack = region.set_guest_addr(PhysAddr::new(guest_addr));
+        let phys_addr = PhysAddr::new(guest_addr);
+        let stack = region.set_guest_addr(phys_addr);
 
         let size = (capacity.get() as u64 / DefaultAlign::ALIGNMENT) as u32;
         let entry = LayoutTableEntry::new(
-            PhysAddr::new(guest_addr),
+            phys_addr,
+            phys_addr.as_virt_addr(),
             size,
             Flags::PRESENT | Flags::DATA_WRITE | Flags::STACK,
         );
@@ -368,15 +368,29 @@ impl Vm {
     /// allocate shared memory managed by the guest
     fn alloc_shared_guest(
         &mut self,
-        addr: PhysAddr,
+        upper: PhysAddr,
     ) -> Result<(Region<ReadWrite>, LayoutTableEntry)> {
-        let region = self
-            .manager
-            .alloc_accessible::<ReadWrite>(self.cfg.shared_guest)?
-            .set_guest_addr(addr);
+        let capacity = self.cfg.shared_guest;
+        let proto = self.manager.alloc_accessible::<ReadWrite>(capacity)?;
 
+        // ensure same address alignment as the shared memory region
+        let addr_base = Self::align_by_ref(
+            upper.as_usize() as u64 - capacity.get() as u64,
+            proto.as_ptr() as u64,
+        );
+
+        // set the address of the region to the aligned address
+        let addr = PhysAddr::new(addr_base.get());
+        let region = proto.set_guest_addr(addr);
+
+        // construct the layout table entry
+        let host_vaddr = region.as_ptr() as u64;
         let size = (self.cfg.shared_guest.get() as u64 / DefaultAlign::ALIGNMENT) as u32;
-        let layout = LayoutTableEntry::new(addr, size, Flags::PRESENT | Flags::DATA_SHARED_OWNED);
+        let layout = LayoutTableEntry::empty()
+            .set_paddr(addr)
+            .set_vaddr(VirtAddr::new_truncate(host_vaddr))
+            .set_len(size)
+            .set_flags(Flags::PRESENT | Flags::DATA_SHARED_OWNED);
 
         Ok((region, layout))
     }
@@ -384,15 +398,29 @@ impl Vm {
     /// allocate shared memory managed by the host
     fn alloc_shared_host(
         &mut self,
-        addr: PhysAddr,
+        upper: PhysAddr,
     ) -> Result<(Region<ReadWrite>, LayoutTableEntry)> {
-        let region = self
-            .manager
-            .alloc_accessible::<ReadWrite>(self.cfg.shared_host)?
-            .set_guest_addr(addr);
+        let capacity = self.cfg.shared_host;
+        let proto = self.manager.alloc_accessible::<ReadWrite>(capacity)?;
 
-        let size = (self.cfg.shared_host.get() as u64 / DefaultAlign::ALIGNMENT) as u32;
-        let layout = LayoutTableEntry::new(addr, size, Flags::PRESENT | Flags::DATA_SHARED_FOREIGN);
+        // ensure the same address alignment as the shared memory region
+        let addr_base = Self::align_by_ref(
+            upper.as_usize() as u64 - capacity.get() as u64,
+            proto.as_ptr() as u64,
+        );
+
+        // set the address of the region to the aligned address
+        let addr = PhysAddr::new(addr_base.get());
+        let region = proto.set_guest_addr(addr);
+
+        // construct the layout table entry
+        let host_vaddr = region.as_ptr() as u64;
+        let size = (self.cfg.shared_guest.get() as u64 / DefaultAlign::ALIGNMENT) as u32;
+        let layout = LayoutTableEntry::empty()
+            .set_paddr(addr)
+            .set_vaddr(VirtAddr::new_truncate(host_vaddr))
+            .set_len(size)
+            .set_flags(Flags::PRESENT | Flags::DATA_SHARED_FOREIGN);
 
         Ok((region, layout))
     }
@@ -416,11 +444,13 @@ impl Vm {
         // write LDT
         sys_region.write_offset(SYS_REGION_OFFSET_IDT as usize, setup::idt().as_ref())?;
         self.mem_mappings.push(sys_region);
-        exec.layout.push(LayoutTableEntry::new(
-            GUEST_SYSTEM_ADDR(),
-            (IDT_PAGE_REQUIRED + GDT_PAGE_REQUIRED) as u32,
-            Flags::PRESENT | Flags::DATA_WRITE,
-        ));
+        exec.layout.push(
+            LayoutTableEntry::empty()
+                .set_paddr(GUEST_SYSTEM_ADDR())
+                .set_vaddr(GUEST_SYSTEM_ADDR().as_virt_addr())
+                .set_len((IDT_PAGE_REQUIRED + GDT_PAGE_REQUIRED) as u32)
+                .set_flags(Flags::PRESENT | Flags::DATA_WRITE),
+        );
 
         // Empty init the layout region
         let layout = AlignedNonZeroUsize::new_aligned(Page4KiB::ALIGNMENT as usize).unwrap();
@@ -428,9 +458,13 @@ impl Vm {
             .manager
             .alloc_accessible::<ReadWrite>(layout)?
             .set_guest_addr(BMVM_MEM_LAYOUT_TABLE);
-        let layout_entry =
-            LayoutTableEntry::new(BMVM_MEM_LAYOUT_TABLE, 1, Flags::PRESENT | Flags::DATA_READ);
-        exec.layout.push(layout_entry);
+        exec.layout.push(
+            LayoutTableEntry::empty()
+                .set_paddr(BMVM_MEM_LAYOUT_TABLE)
+                .set_vaddr(BMVM_MEM_LAYOUT_TABLE.as_virt_addr())
+                .set_len(1)
+                .set_flags(Flags::PRESENT | Flags::DATA_READ),
+        );
 
         // setup the paging structure
         let regions = paging::setup(
@@ -481,7 +515,7 @@ impl Vm {
                 addr: idt,
                 entries: 0,
             },
-            paging,
+            paging: paging,
             stack: (GUEST_STACK_ADDR().as_virt_addr() - 1).align_floor::<Stack>(),
             entry: entry_point,
             cpu_id: setup::cpuid(&self.kvm)?,
@@ -545,7 +579,7 @@ impl Vm {
 
     /// dump the region containing the address to file
     fn dump_region_to_file(&self, addr: u64, name: String) -> Result<()> {
-        let paddr = PhysAddr::<DefaultAddrSpace>::from(unsafe { VirtAddr::new_unsafe(addr) });
+        let paddr = PhysAddr::<DefaultAddrSpace>::from(unsafe { VirtAddr::new_unchecked(addr) });
         if let Some(r) = self.mem_mappings.get(paddr) {
             match r.as_ref() {
                 Some(reference) => {

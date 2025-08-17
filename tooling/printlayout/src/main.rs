@@ -8,7 +8,8 @@ use tabled::{Table, Tabled};
 #[derive(Tabled)]
 struct TableEntry {
     idx: usize,
-    addr: String,
+    paddr: String,
+    vaddr: String,
     size: usize,
     stack: bool,
     data_usage: String,
@@ -42,7 +43,8 @@ fn main() -> anyhow::Result<()> {
 
         table_entries.push(TableEntry {
             idx,
-            addr: format!("{:X}", entry.addr().as_u64() as usize),
+            paddr: format!("{:X}", entry.paddr().as_u64() as usize),
+            vaddr: format!("{:X}", entry.vaddr().as_u64() as usize),
             size: entry.pages() as usize,
             stack: entry.flags().contains(Flags::STACK),
             data_usage: access,
