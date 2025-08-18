@@ -76,7 +76,10 @@ pub fn expose_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // function wrapper generation
     let wrapper = gen_wrapper(&mother, fn_name, &wrapper_fn_name, &param_type);
     // optionally indicate debug information in the metadata
-    let debug = gen_call_meta_debug();
+    let debug = gen_call_meta_debug(&proc_macro2::Ident::new(
+        fn_name.to_string().as_str(),
+        Span::call_site(),
+    ));
     // TokenStream containing static defs for FnCall etc
     let meta = callmeta.token;
     let upcall_sig = callmeta.sig;
