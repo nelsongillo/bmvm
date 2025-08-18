@@ -3,12 +3,15 @@ resolver = "3"
 members = [
     "bmvm_guest",
     "bmvm_common",
-    "bmvm_host",
-    "examples/guest",
     "bmvm_macros",
+    "bmvm_host",
+
+    "examples/guest",
     "examples/host",
-    "examples/host-expand",
-    "examples/longmode",
+
     "tooling/printlayout",
     "tooling/vmi-inspect",
+
+    "bench/setup-linking/bmvm_guest_expose",
+    "bench/setup-linking/bmvm_startup_setup_expose",
 ]

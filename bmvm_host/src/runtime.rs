@@ -79,7 +79,7 @@ impl Runtime {
         let (upcalls, hypercalls) = self.linker.into_calls();
 
         self.vm.link(hypercalls, upcalls);
-        self.vm.run::<()>(false).map_err(Error::Vm)?;
+        self.vm.run::<()>().map_err(Error::Vm)?;
         Ok(Module { vm: self.vm })
     }
 }

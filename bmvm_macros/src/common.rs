@@ -64,10 +64,17 @@ pub(crate) fn get_link_name(attrs: &[Attribute]) -> Option<Ident> {
 /// get the string representation of a type. If the type is not supported, return an error.
 pub(crate) fn supported_type_string(ty: &Type) -> Result<String, Error> {
     match ty {
+        Type::Tuple(tuple) => {
+            if tuple.elems.len() == 0 {
+                Ok("()".to_string())
+            } else {
+                Err(Error::new_spanned(ty.clone(), "tuples are not supported"))
+            }
+        }
         // Match simple types like u32, i8, etc.
         Type::Path(TypePath { path, .. }) => Ok(path.to_token_stream().to_string()),
         Type::Reference(tr) => Ok(tr.to_token_stream().to_string()),
-        _ => Err(syn::Error::new_spanned(ty.clone(), "unsupported type")),
+        _ => Err(Error::new_spanned(ty.clone(), "unsupported type")),
     }
 }
 
@@ -180,7 +187,7 @@ pub(crate) fn extract_params(sig: &Signature) -> Vec<(Ident, Type)> {
 pub(crate) fn construct_idents(fn_name: &Ident, suffix: &str) -> (Ident, Ident, Ident) {
     let wrapper_fn_name = format_ident!("{}_bmvm_wrapper_{}", fn_name, suffix);
     let struct_name = format_ident!("{}BMVMWrapper{}", fn_name, suffix);
-    let static_upcall_name = format_ident!("UPCALL_FN_WRAPPER_{}", suffix);
+    let static_upcall_name = format_ident!("UPCALL_FN_WRAPPER_{}_{}", fn_name, suffix);
     (wrapper_fn_name, struct_name, static_upcall_name)
 }
 
@@ -342,7 +349,7 @@ pub fn gen_callmeta(
     let meta_name_tuple = format_ident!("{}{}", STATIC_META_TUPLE, fn_name.to_uppercase());
     let meta_name_sig = format_ident!("{}{}", STATIC_META_SIG, fn_name.to_uppercase());
     let meta_name = format_ident!("{}{}", STATIC_META, fn_name.to_uppercase());
-    let var_param_hasher = format_ident!("hasher_params");
+    let var_param_hash = format_ident!("param_hash");
 
     // Get the CallMeta as bytes and prefix with the size (u16)
     let bytes = meta.to_bytes();
@@ -362,16 +369,28 @@ pub fn gen_callmeta(
     let ty_typesignature = quote! {#crate_bmvm::TypeSignature};
 
     // Convert each string to a syn::Type and quote the hashing line
-    let param_hash_lines = params
-        .iter()
-        .enumerate()
-        .map(|(idx, ty)| {
-            quote! {
-                #var_param_hasher.write((#idx as u64).to_le_bytes().as_slice());
-                #var_param_hasher.write(<#ty as #ty_typesignature>::SIGNATURE.to_le_bytes().as_slice());
-            }
-        })
-        .collect::<Vec<_>>();
+    let param_hash = if params.len() > 0 {
+        let var_hasher = format_ident!("hasher_params");
+
+        let lines = params
+            .iter()
+            .enumerate()
+            .map(|(idx, ty)| {
+                quote! {
+                    #var_hasher.write((#idx as u64).to_le_bytes().as_slice());
+                    #var_hasher.write(<#ty as #ty_typesignature>::SIGNATURE.to_le_bytes().as_slice());
+                }
+            })
+            .collect::<Vec<_>>();
+
+        quote! {
+             let mut #var_hasher = #ty_hash::new();
+            #(#lines)*
+            let #var_param_hash = #var_hasher.finish();
+        }
+    } else {
+        quote! {let #var_param_hash = <() as #ty_typesignature>::SIGNATURE;}
+    };
 
     // The FnCall signature is stored in the first 8 bytes of the FnCall data. At the moment it is
     // only a partial signature, as the type hashes are not yet known and cannot be included on
@@ -383,12 +402,10 @@ pub fn gen_callmeta(
     let token = quote! {
         #[used]
         static #meta_name_tuple: ([u8; #meta_size], u64) = {
-            let mut #var_param_hasher = #ty_hash::new();
-            #(#param_hash_lines)*
-            let param_hash = #var_param_hasher.finish();
-
-            let mut sig_hasher = #ty_hash::from_partial(#sig_seed);
-            sig_hasher.write(param_hash.to_le_bytes().as_slice());
+            #param_hash
+            let mut sig_hasher = #ty_hash::new();
+            sig_hasher.write(#fn_name.as_bytes());
+            sig_hasher.write(#var_param_hash.to_le_bytes().as_slice());
             sig_hasher.write(<#return_type as #ty_typesignature>::SIGNATURE.to_le_bytes().as_slice());
             let sig = sig_hasher.finish();
             let sig_bytes = sig.to_ne_bytes();
