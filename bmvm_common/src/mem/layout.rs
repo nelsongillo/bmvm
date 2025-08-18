@@ -1,13 +1,14 @@
 use crate::interprete::{Interpret, Zero};
-use crate::mem::{Align, DefaultAlign, PhysAddr};
+use crate::mem::{Align, AlignedNonZeroUsize, Arena, DefaultAlign, PhysAddr, VirtAddr};
 use bitflags::bitflags;
-use x86_64::structures::paging::PageTableFlags;
+use core::num::NonZeroUsize;
+use core::ptr::NonNull;
 
 pub const MAX_REGION_SIZE: u64 = u16::MAX as u64 * DefaultAlign::ALIGNMENT;
 
 #[repr(C)]
 pub struct LayoutTable {
-    pub entries: [LayoutTableEntry; 512],
+    pub entries: [LayoutTableEntry; 256],
 }
 
 impl LayoutTable {
@@ -15,31 +16,29 @@ impl LayoutTable {
         Self::default()
     }
 
-    #[cfg(feature = "std")]
+    #[cfg(feature = "vmi-consume")]
     pub fn len_present(&self) -> usize {
         self.as_vec_present().len()
     }
 
-    #[cfg(feature = "std")]
-    pub fn from_vec(vec: &Vec<LayoutTableEntry>) -> Result<LayoutTable, &'static str> {
+    #[cfg(feature = "vmi-consume")]
+    pub fn from_vec(vec: &[LayoutTableEntry]) -> Result<LayoutTable, &'static str> {
         if vec.len() > 512 {
             return Err("layout table cannot contain more than 512 entries");
         }
         let mut l = LayoutTable::new();
-        let mut idx = 0;
-        for e in vec.iter() {
+        for (idx, e) in vec.iter().enumerate() {
             l.entries[idx] = *e;
-            idx += 1;
         }
         Ok(l)
     }
 
-    #[cfg(feature = "std")]
+    #[cfg(feature = "vmi-consume")]
     pub fn as_vec_present(&self) -> Vec<LayoutTableEntry> {
         self.entries
             .iter()
             .filter(|e| e.is_present())
-            .map(|e| e.clone())
+            .copied()
             .collect::<Vec<LayoutTableEntry>>()
     }
 
@@ -48,7 +47,7 @@ impl LayoutTable {
             .iter()
             .enumerate()
             .find(|(_, e)| e.flags().intersects(flag))
-            .map(|(i, e)| (i, e.clone()))
+            .map(|(i, e)| (i, *e))
     }
 }
 
@@ -60,7 +59,7 @@ pub struct LayoutTableIter<'a> {
 impl Default for LayoutTable {
     fn default() -> Self {
         Self {
-            entries: [LayoutTableEntry::empty(); 512],
+            entries: [LayoutTableEntry::empty(); 256],
         }
     }
 }
@@ -87,27 +86,6 @@ impl Iterator for LayoutTableIter<'_> {
     }
 }
 
-bitflags! {
-    #[derive(Copy, Clone)]
-    pub struct Flags: u8 {
-        /// Indicates the entrys presence.
-        const PRESENT = 1;
-        ///  0 -> User; 1 -> System structures
-        const SYSTEM = 1 << 1;
-        /// 0 -> Data; 1 -> Code/Executable
-        const CODE = 1 << 2;
-        /// 0 -> Read; 1 -> Write
-        const WRITE = 1 << 3;
-        const STACK = 1 << 4;
-        // const have no real purpose besides making it more explicit to create
-        // eg: a user read only data section. Using USER | READ | DATA is the same as Flags::empty()
-        // but more explicit.
-        const USER = 0 << 1;
-        const DATA = 0 << 2;
-        const READ = 0 << 3;
-    }
-}
-
 impl<'a> IntoIterator for &'a LayoutTable {
     type Item = LayoutTableEntry;
     type IntoIter = LayoutTableIter<'a>;
@@ -117,44 +95,189 @@ impl<'a> IntoIterator for &'a LayoutTable {
     }
 }
 
-impl Flags {
-    /// Converts the flags to their `PageTableFlags` representation.
-    /// Note: The present flag will not be set by this method.
-    pub fn to_page_table_flags(self) -> PageTableFlags {
-        let mut pt_flags = PageTableFlags::PRESENT;
+bitflags! {
+    /// Memory entry flags with precise bit layout
+    ///
+    /// Bit layout:
+    /// - 0: Present bit - if set, the entry is valid
+    /// - 1: 0 -> User; 1 -> System structures
+    /// - 2: Stack
+    /// - 3: 0 -> Data; 1 -> Code/Executable
+    /// - 4-5:
+    ///     If Section is Data:
+    ///         00 -> Read
+    ///         01 -> Write
+    ///         10 -> Shared Foreign
+    ///         11 -> Shared Owned
+    ///     Else: Unused
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct Flags: u8 {
+        /// Present bit - if set, the entry is valid
+        const PRESENT = 1 << 0;
+        /// System structures (when set), User (when not set)
+        const SYSTEM = 1 << 1;
+        /// Stack flag
+        const STACK = 1 << 2;
+        /// Code/Executable (when set), Data (when not set)
+        const CODE = 1 << 3;
 
-        // If the entry indicates that the page is a data page, check writeable
-        if !self.contains(Flags::CODE) {
-            pt_flags |= PageTableFlags::NO_EXECUTE;
-            if self.contains(Flags::WRITE) {
-                pt_flags |= PageTableFlags::WRITABLE;
-            }
-        }
+        // Data-specific access flags (bits 4-5)
+        const DATA_READ = 0b00 << 4;
+        const DATA_WRITE = 0b01 << 4;
+        const DATA_SHARED_FOREIGN = 0b10 << 4;
+        const DATA_SHARED_OWNED = 0b11 << 4;
 
-        pt_flags
+        // Mask for data access bits
+        const DATA_ACCESS_MASK = 0b11 << 4;
     }
 }
 
+impl Flags {
+    /// Create new flags with all bits cleared
+    pub fn new() -> Self {
+        Flags::empty()
+    }
+
+    /// Check if this is a valid (present) entry
+    pub fn is_present(&self) -> bool {
+        self.contains(Flags::PRESENT)
+    }
+
+    /// Set the present bit
+    pub fn set_present(&mut self, present: bool) {
+        self.set(Flags::PRESENT, present);
+    }
+
+    /// Check if this is a system entry
+    pub fn is_system(&self) -> bool {
+        self.contains(Flags::SYSTEM)
+    }
+
+    /// Set system/user flag
+    pub fn set_system(&mut self, system: bool) {
+        self.set(Flags::SYSTEM, system);
+    }
+
+    /// Check if this is a stack entry
+    pub fn is_stack(&self) -> bool {
+        self.contains(Flags::STACK)
+    }
+
+    /// Set stack flag
+    pub fn set_stack(&mut self, stack: bool) {
+        self.set(Flags::STACK, stack);
+    }
+
+    /// Check if this is code (executable)
+    pub fn is_code(&self) -> bool {
+        self.contains(Flags::CODE)
+    }
+
+    /// Set code/data flag
+    pub fn set_code(&mut self, code: bool) {
+        self.set(Flags::CODE, code);
+    }
+
+    /// Get the data access mode (only valid when !is_code())
+    pub fn data_access_mode(&self) -> Option<DataAccessMode> {
+        if self.is_code() {
+            return None;
+        }
+
+        match self.bits() >> 4 & 0b11 {
+            0b00 => Some(DataAccessMode::Read),
+            0b01 => Some(DataAccessMode::Write),
+            0b10 => Some(DataAccessMode::SharedForeign),
+            0b11 => Some(DataAccessMode::SharedOwned),
+            _ => unreachable!(), // We've masked to 2 bits, so only 0-3 possible
+        }
+    }
+
+    pub fn is_write(&self) -> bool {
+        if self.is_code() {
+            return false;
+        }
+        if self.is_stack() {
+            return true;
+        }
+
+        self.data_access_mode().is_some_and(|m| match m {
+            DataAccessMode::Read => false,
+            DataAccessMode::Write => true,
+            DataAccessMode::SharedForeign => true,
+            DataAccessMode::SharedOwned => true,
+        })
+    }
+
+    /// Set the data access mode (only valid when !is_code())
+    pub fn set_data_access_mode(&mut self, mode: DataAccessMode) -> Result<(), &'static str> {
+        if self.is_code() {
+            return Err("Cannot set data access mode on code section");
+        }
+
+        // Clear the existing bits
+        self.remove(Flags::DATA_ACCESS_MASK);
+
+        // Set the new bits
+        *self |= match mode {
+            DataAccessMode::Read => Flags::DATA_READ,
+            DataAccessMode::Write => Flags::DATA_WRITE,
+            DataAccessMode::SharedForeign => Flags::DATA_SHARED_FOREIGN,
+            DataAccessMode::SharedOwned => Flags::DATA_SHARED_OWNED,
+        };
+
+        Ok(())
+    }
+}
+
+/// Data access modes (only valid for data sections)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataAccessMode {
+    Read,
+    Write,
+    SharedForeign,
+    SharedOwned,
+}
+
+#[cfg(feature = "vmi-consume")]
+impl core::fmt::Display for DataAccessMode {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl Default for Flags {
+    fn default() -> Self {
+        Flags::new()
+    }
+}
+impl Flags {}
+
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord)]
-pub struct LayoutTableEntry(u64);
+pub struct LayoutTableEntry(u128);
 
 /// The layout table entry is 64 bits wide, so we can use the first 63 bits for the size
 /// 0: Present bit - if set, the entry is valid
 /// 1: 0 -> User; 1 -> System structures
-/// 2: 0 -> Data; 1 -> Code/Executable
-/// 3: If Section is Data:
-///     1 -> Write
-///     0 -> Read
-///    Else:
-///     Unused
-/// 4: Stack
-/// 8-24: multiplicator of pages
-/// 24-63: starting address
+/// 2: Stack
+/// 3: 0 -> Data; 1 -> Code/Executable
+/// 4-5:
+///     If Section is Data:
+///         00 -> Read
+///         01 -> Write
+///         10 -> Shared Foreign
+///         11 -> Shared Owned
+///     Else: Unsued
+/// 8-27: multiplicator of pages
+/// 28-63: physical starting address
+/// 64-99: virtual starting address
+/// 100-127: padding
 impl LayoutTableEntry {
-    const MASK_RETRIEVE_FLAGS: u64 = 0x0000_0000_0000_00ff;
-    const MASK_RETRIEVE_SIZE: u64 = 0x0000_0000_0fff_ff00;
-    const MASK_RETRIEVE_ADDR: u64 = 0xffff_ffff_f000_0000;
+    const MASK_RETRIEVE_FLAGS: u128 = 0xff;
+    const MASK_RETRIEVE_SIZE: u128 = 0xf_ffff << 8;
+    const MASK_RETRIEVE_PADDR: u128 = 0xf_ffff_ffff << 28;
+    const MASK_RETRIEVE_VADDR: u128 = 0xf_ffff_ffff << 64;
 
     /// Creates a new LayoutTableEntry with the given parameters.
     ///
@@ -162,98 +285,170 @@ impl LayoutTableEntry {
     /// * `addr` - The physical address, where the region should start. Must be a valid paged aligned physical address.
     /// * `size` - Indicates the number of pages the region is spanning. Limited to 20bit, resulting in maximal 4GiB big regions.
     /// * `flags` - The flags mark the entry for a specific use-case, which will result in the equivalent paging flags.
-    pub fn new(addr: PhysAddr, size: u32, flags: Flags) -> Self {
+    pub fn new(paddr: PhysAddr, vaddr: VirtAddr, size: u32, flags: Flags) -> Self {
         assert!(
-            DefaultAlign::is_aligned(addr.as_u64()),
-            "addr must be page aligned"
+            DefaultAlign::is_aligned(paddr.as_u64()),
+            "physical addr must be page aligned"
+        );
+        assert!(
+            DefaultAlign::is_aligned(vaddr.as_u64()),
+            "virtual addr must be page aligned"
         );
         assert!(
             Self::is_valid_size(size),
             "size must not be zero and exceed 20 bits"
         );
-        let mut value = flags.bits() as u64;
+        let mut value = flags.bits() as u128;
 
         // set the size
-        value |= (size as u64) << 8;
-        // set the address
-        value |= (addr.as_u64()) << 16;
+        value |= (size as u128) << 8;
+        // set the physical address
+        value |= (paddr.as_u64() as u128 & 0xFFFF_FFFF_F000) << 16;
+        // set the virtual address
+        value |= (vaddr.as_u64() as u128 & 0xFFFF_FFFF_F000) << 52;
 
         LayoutTableEntry(value)
     }
 
     /// Creates a new empty layoutTableEntry
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         LayoutTableEntry(0)
     }
 
-    pub fn set_present(&mut self, present: bool) -> &mut Self {
+    pub fn set_present(self, present: bool) -> Self {
         let mut flags = self.flags();
         flags.set(Flags::PRESENT, present);
-        self.set_flags(flags)
+        self.set_flags(flags);
+        self
     }
 
-    pub fn set_flags(&mut self, flags: Flags) -> &mut Self {
+    pub const fn set_flags(mut self, flags: Flags) -> Self {
         self.0 &= !Self::MASK_RETRIEVE_FLAGS;
-        self.0 |= flags.bits() as u64;
+        self.0 |= flags.bits() as u128;
         self
     }
 
-    pub fn set_len(&mut self, size: u32) -> &mut Self {
+    pub const fn set_len(mut self, size: u32) -> Self {
         self.0 &= !Self::MASK_RETRIEVE_SIZE;
-        self.0 |= (size as u64) << 8;
+        self.0 |= (size as u128) << 8;
         self
     }
 
-    pub fn set_addr(&mut self, addr: PhysAddr) -> &mut Self {
+    pub fn set_paddr(mut self, addr: PhysAddr) -> Self {
         assert!(
             DefaultAlign::is_aligned(addr.as_u64()),
-            "addr must be page aligned"
+            "physical addr must be page aligned"
         );
-        self.0 &= !Self::MASK_RETRIEVE_ADDR;
-        self.0 |= (addr.as_u64()) << 16;
+        self.0 &= !Self::MASK_RETRIEVE_PADDR;
+        self.0 |= (addr.as_u64() as u128 & 0xFFFF_FFFF_F000) << 16;
+        self
+    }
+
+    pub fn set_vaddr(mut self, addr: VirtAddr) -> Self {
+        assert!(
+            DefaultAlign::is_aligned(addr.as_u64()),
+            "virtual addr must be page aligned"
+        );
+        self.0 &= !Self::MASK_RETRIEVE_VADDR;
+        self.0 |= (addr.as_u64() as u128 & 0xFFFF_FFFF_F000) << 52;
         self
     }
 
     /// Checks if the entry is present
-    pub fn is_present(&self) -> bool {
-        let f = self.flags();
-        let b = f.contains(Flags::PRESENT);
-        b
+    pub const fn is_present(&self) -> bool {
+        self.flags().contains(Flags::PRESENT)
     }
 
-    pub fn flags(&self) -> Flags {
+    pub const fn flags(&self) -> Flags {
         let f = self.0 & Self::MASK_RETRIEVE_FLAGS;
         Flags::from_bits_truncate(f as u8)
     }
 
     /// Gets the number of pages included in the entry
-    pub fn len(&self) -> u32 {
+    pub const fn pages(&self) -> u32 {
         ((self.0 & Self::MASK_RETRIEVE_SIZE) >> 8) as u32
     }
 
-    /// Returns the size of the entry in bytes
-    pub fn size(&self) -> u64 {
-        self.len() as u64 * DefaultAlign::ALIGNMENT
+    /// Returns the size of the entry in bytes. The size is page-aligned.
+    pub const fn size(&self) -> u64 {
+        self.pages() as u64 * DefaultAlign::ALIGNMENT
     }
 
-    /// Returns the starting address
-    pub fn addr(&self) -> PhysAddr {
-        PhysAddr::new((self.0 & Self::MASK_RETRIEVE_ADDR) >> 16)
+    /// Returns the physical starting address
+    pub fn paddr(&self) -> PhysAddr {
+        PhysAddr::new(self.paddr_raw())
+    }
+
+    /// Returns the virtual starting address
+    pub fn vaddr(&self) -> VirtAddr {
+        VirtAddr::new_truncate(self.vaddr_raw())
+    }
+
+    /// Returns the raw physical address as stored in the entry
+    pub const fn paddr_raw(&self) -> u64 {
+        ((self.0 & Self::MASK_RETRIEVE_PADDR) >> 16) as u64
+    }
+
+    /// Returns the raw virtual address as stored in the entry
+    pub const fn vaddr_raw(&self) -> u64 {
+        ((self.0 & Self::MASK_RETRIEVE_VADDR) >> 52) as u64
     }
 
     #[inline]
-    pub const fn as_u64(&self) -> u64 {
+    pub const fn as_u128(&self) -> u128 {
         self.0
     }
 
     #[inline]
-    pub const fn as_array(&self) -> [u8; 8] {
-        self.0.to_le_bytes()
+    pub const fn as_array(&self) -> [u8; 16] {
+        self.0.to_ne_bytes()
     }
 
     #[inline]
     pub const fn is_valid_size(size: u32) -> bool {
         size > 0 && size == size & (Self::MASK_RETRIEVE_SIZE >> 8) as u32
+    }
+}
+
+impl From<u128> for LayoutTableEntry {
+    fn from(value: u128) -> Self {
+        LayoutTableEntry(value)
+    }
+}
+
+impl From<LayoutTableEntry> for Arena {
+    fn from(entry: LayoutTableEntry) -> Self {
+        unsafe {
+            let ptr = NonNull::new_unchecked(entry.vaddr().as_mut_ptr::<u8>());
+            let size = NonZeroUsize::new(entry.size() as usize).unwrap();
+            let capacity = AlignedNonZeroUsize::new_unchecked(size);
+
+            Arena { ptr, capacity }
+        }
+    }
+}
+
+#[cfg(feature = "vmi-consume")]
+impl core::fmt::Display for LayoutTableEntry {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let paddr = self.paddr_raw() as usize;
+        let vaddr = self.vaddr_raw() as usize;
+        let size = self.pages() as usize;
+        let system = self.flags().contains(Flags::SYSTEM);
+        let present = self.flags().contains(Flags::PRESENT);
+
+        let usage = match () {
+            _ if self.flags().is_stack() => String::from("STACK"),
+            _ if self.flags().is_code() => String::from("CODE"),
+            _ if !self.flags().is_code() => format!("{}", self.flags().data_access_mode().unwrap()),
+            _ => String::new(),
+        };
+
+        write!(
+            f,
+            "Present: {}, PhysAddr: {:#x}, VirtAddr: {:#x}, Size: {}, System: {}, USAGE: {} ",
+            present, paddr, vaddr, size, system, usage,
+        )
     }
 }
 
@@ -269,18 +464,42 @@ mod test {
 
     #[test]
     fn layout_table_entry_new() {
-        let addr = PhysAddr::new(0x0000_1234_5678_9000);
-        let entry = LayoutTableEntry::new(addr, 0x1234, Flags::empty());
-        assert_eq!(0x1234567890123400, entry.0, "got {:x}", entry.0);
+        let paddr = PhysAddr::new_unchecked(0x0000_1234_5678_9000);
+        let vaddr = VirtAddr::new_truncate(0x0000_1234_5678_9000);
+        let empty_flags = Flags::empty();
+        let size = 0x1234;
+        let constructor = LayoutTableEntry::new(paddr, vaddr, size, empty_flags);
+        let builder = LayoutTableEntry::empty()
+            .set_vaddr(vaddr)
+            .set_paddr(paddr)
+            .set_len(size)
+            .set_flags(empty_flags);
+
         assert_eq!(
-            addr.as_u64(),
-            entry.addr().as_u64(),
+            0x1234567891234567890123400, constructor.0,
             "got {:x}",
-            entry.addr().as_u64()
+            builder.0
         );
-        assert_eq!(Flags::empty().bits(), entry.flags().bits());
-        assert_eq!(0x1234, entry.len());
-        assert!(!entry.is_present());
+        assert_eq!(
+            constructor.0, builder.0,
+            "expected {:x}, got {:x}",
+            constructor.0, builder.0
+        );
+        assert_eq!(
+            paddr.as_u64(),
+            constructor.paddr_raw(),
+            "paddr got {:x}",
+            constructor.paddr().as_u64()
+        );
+        assert_eq!(
+            vaddr.as_u64(),
+            constructor.vaddr_raw(),
+            "vaddr got {:x}",
+            constructor.vaddr().as_u64()
+        );
+        assert_eq!(Flags::empty().bits(), constructor.flags().bits());
+        assert_eq!(0x1234, constructor.pages());
+        assert!(!constructor.is_present());
     }
 
     #[test]
@@ -289,12 +508,31 @@ mod test {
         entry
             .set_len(0xabcde)
             .set_flags(Flags::CODE | Flags::PRESENT)
-            .set_addr(PhysAddr::new(0x0000123456789000)); // check for correct truncation
-        assert_eq!(0x123456789abcde05, entry.0, "got {:x}", entry.0);
+            .set_paddr(PhysAddr::new_unchecked(0x0000123456789000))
+            .set_vaddr(VirtAddr::new_unchecked(0x0000123456789000)); // check for correct truncation
+        assert_eq!(0x123456789123456789abcde09, entry.0, "got {:x}", entry.0);
     }
 
     #[test]
-    #[cfg(feature = "std")]
+    fn flag_build() {
+        assert_eq!(Flags::empty().bits(), 0);
+        assert_eq!(
+            (Flags::PRESENT | Flags::DATA_SHARED_FOREIGN).bits(),
+            0b0010_0001
+        );
+        assert!(!(Flags::PRESENT | Flags::DATA_SHARED_FOREIGN).is_code());
+        assert_eq!(
+            (Flags::PRESENT | Flags::DATA_SHARED_FOREIGN).data_access_mode(),
+            Some(DataAccessMode::SharedForeign)
+        );
+        assert_eq!(
+            (Flags::PRESENT | Flags::DATA_READ).data_access_mode(),
+            Some(DataAccessMode::Read)
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "vmi-consume")]
     fn layout_len() {
         let mut layout = LayoutTable::default();
         for i in 0..5 {
@@ -305,10 +543,69 @@ mod test {
     }
 
     #[test]
-    fn contains_vs_intersects() {
-        let base = Flags::PRESENT | Flags::SYSTEM;
+    fn test_present_flag() {
+        let mut flags = Flags::new();
+        assert!(!flags.is_present());
 
-        assert!(base.contains(Flags::SYSTEM));
-        assert!(base.intersects(Flags::SYSTEM));
+        flags.set_present(true);
+        assert!(flags.is_present());
+        assert_eq!(flags.bits(), 0b00000001);
+
+        flags.set_present(false);
+        assert!(!flags.is_present());
+    }
+
+    #[test]
+    fn test_system_flag() {
+        let mut flags = Flags::new();
+        assert!(!flags.is_system());
+
+        flags.set_system(true);
+        assert!(flags.is_system());
+        assert_eq!(flags.bits(), 0b00000010);
+    }
+
+    #[test]
+    fn test_code_data_flag() {
+        let mut flags = Flags::new();
+        assert!(!flags.is_code());
+
+        flags.set_code(true);
+        assert!(flags.is_code());
+        assert_eq!(flags.bits(), 0b00001000);
+    }
+
+    #[test]
+    fn test_data_access_modes() {
+        let mut flags = Flags::new();
+        flags.set_code(false); // Ensure it's data
+
+        flags.set_data_access_mode(DataAccessMode::Read).unwrap();
+        assert_eq!(flags.data_access_mode(), Some(DataAccessMode::Read));
+
+        flags.set_data_access_mode(DataAccessMode::Write).unwrap();
+        assert_eq!(flags.data_access_mode(), Some(DataAccessMode::Write));
+
+        flags
+            .set_data_access_mode(DataAccessMode::SharedForeign)
+            .unwrap();
+        assert_eq!(
+            flags.data_access_mode(),
+            Some(DataAccessMode::SharedForeign)
+        );
+
+        flags
+            .set_data_access_mode(DataAccessMode::SharedOwned)
+            .unwrap();
+        assert_eq!(flags.data_access_mode(), Some(DataAccessMode::SharedOwned));
+    }
+
+    #[test]
+    fn test_data_access_on_code_section() {
+        let mut flags = Flags::new();
+        flags.set_code(true);
+
+        assert_eq!(flags.data_access_mode(), None);
+        assert!(flags.set_data_access_mode(DataAccessMode::Read).is_err());
     }
 }

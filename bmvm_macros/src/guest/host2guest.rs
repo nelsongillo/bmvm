@@ -1,186 +1,189 @@
-use bmvm_common::hash::{Djb2, Djb264};
-use proc_macro::{Span, TokenStream};
-use proc_macro_crate::{FoundCrate, crate_name};
-use proc_macro2::{Span as Span2, TokenStream as TokenStream2};
-use quote::{format_ident, quote};
-use syn::{
-    FnArg, Ident, ItemFn, Pat, PatType, Type, TypePath, WherePredicate, parse_macro_input,
-    parse_quote,
+use crate::common::{
+    CallDirection, MOTHER_CRATE, VAR_NAME_PARAM, VAR_NAME_RETURN, construct_idents, create_fn_call,
+    extract_params, gen_callmeta, process_params,
 };
+use crate::common::{find_crate, suffix};
+use crate::guest::{ParamType, gen_call_meta_debug};
+use bmvm_common::{BMVM_META_SECTION_EXPOSE, BMVM_META_SECTION_EXPOSE_CALLS};
+use proc_macro::TokenStream;
+use proc_macro2::{Span, TokenStream as TS};
+use quote::quote;
+use syn::{Ident, ItemFn, parse_macro_input};
 
-type StructFields = Vec<TokenStream2>;
-type WherePreds = Vec<WherePredicate>;
-type ParamUnpacking = Vec<TokenStream2>;
-
-/// A procedural macro that:
-/// 1. Checks that all function parameters implement either Type or Serializable trait
-/// 2. Creates a C-compatible struct (with repr(C)) containing all parameters
-/// 3. Generates a wrapper function that takes the struct, unpacks it, and calls the original function
+/// Procedural macro implementation:
+/// * Checks that all function parameters implement TypeSignature and return type implements OwnedShareable trait
+/// * Creates a C-compatible struct (with repr(C)) containing all parameters
+/// * Generates a wrapper function that takes the struct, unpacks it, and calls the original function
+/// * Create an entry in the distributed slice of exposed function calls
 pub fn expose_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // Parse the function
     let input_fn = parse_macro_input!(item as ItemFn);
 
     // Extract the function name and signature
     let fn_name = &input_fn.sig.ident;
-    let fn_vis = &input_fn.vis;
-    let fn_output = &input_fn.sig.output;
 
-    // build struct fields and unpacking logic
-    let params = extract_params(&input_fn);
-    let (struct_fields, where_preds, param_unpacking) = match process_params(&params) {
+    // bmvm-(guest|host) crate
+    let mother = match find_crate(MOTHER_CRATE) {
         Ok(x) => x,
         Err(e) => return e.to_compile_error().into(),
     };
 
     // construct the function and struct names
-    let suffix = suffix();
-    let wrapper_fn_name = format_ident!("{}_bmvm_wrapper_{}", fn_name, suffix);
-    let struct_name = format_ident!("{}BMVMWrapper{}", fn_name, suffix);
+    let (wrapper_fn_name, transport_struct_name, static_upcall) =
+        construct_idents(fn_name, suffix().as_str());
+
+    // vmi metadata generation
+    let fn_call = create_fn_call(&input_fn.attrs, &input_fn.sig);
+    if fn_call.is_err() {
+        return fn_call.err().unwrap().to_compile_error().into();
+    }
+    let (fn_call, params, return_type) = fn_call.unwrap();
+
+    // generate call meta static data
+    let callmeta = match gen_callmeta(
+        fn_call,
+        params,
+        return_type,
+        fn_name.to_string().as_str(),
+        BMVM_META_SECTION_EXPOSE,
+    ) {
+        Ok(x) => x,
+        Err(e) => return e.to_compile_error().into(),
+    };
+
+    // build struct fields and unpacking logic
+    let params = extract_params(&input_fn.sig);
+    let param_type = match process_params(
+        &mother,
+        &transport_struct_name,
+        &params,
+        Some(CallDirection::Host2Guest),
+    ) {
+        Ok(x) => x,
+        Err(e) => return e.to_compile_error().into(),
+    };
+
+    // extract optional transport struct definition
+    let transport_struct_definition = if let ParamType::MultipleValues {
+        struct_definition, ..
+    } = &param_type
+    {
+        struct_definition
+    } else {
+        &quote! {}
+    };
+
+    // function wrapper generation
+    let wrapper = gen_wrapper(&mother, fn_name, &wrapper_fn_name, &param_type);
+    // optionally indicate debug information in the metadata
+    let debug = gen_call_meta_debug();
+    // TokenStream containing static defs for FnCall etc
+    let meta = callmeta.token;
+    let upcall_sig = callmeta.sig;
 
     // Generate the final token stream
-    let expanded = quote! {
-        // The original function will remain unchanged
+    quote! {
+        #debug
+        #meta
+        #transport_struct_definition
+        #wrapper
         #input_fn
 
-        // Struct containing all parameters for #fn_name
-        #fn_vis struct #struct_name
-        where
-            #(#where_preds),*
-        {
-            #(#struct_fields),*
+        #[used]
+        #[allow(non_upper_case_globals)]
+        #[unsafe(link_section = #BMVM_META_SECTION_EXPOSE_CALLS)]
+        static #static_upcall: #mother::UpcallFn = #mother::UpcallFn {
+            sig: #upcall_sig,
+            func: #wrapper_fn_name,
+        };
+    }
+    .into()
+}
+
+/// Generates the upcall wrapper, which will be called by the Upcall-Handler
+fn gen_wrapper(mother: &Ident, fn_name: &Ident, fn_name_wrapper: &Ident, params: &ParamType) -> TS {
+    let exit_code_return = quote! {#mother::ExitCode::Return};
+    let ty_transport = quote! {#mother::Transport};
+    let foreign = quote! {#mother::Foreign};
+    let foreign_shareable = quote! {#mother::ForeignShareable};
+    let owned_shareable = quote! {#mother::OwnedShareable};
+    let exit_with_code = quote! {#mother::exit_with_code};
+    let var_params = Ident::new(VAR_NAME_PARAM, Span::call_site());
+    let var_return = Ident::new(VAR_NAME_RETURN, Span::call_site());
+
+    let func_call = match params {
+        ParamType::Void => {
+            quote! {
+                    let #var_return = #fn_name();
+            }
         }
+        ParamType::Value { ty_turbofish, .. } => {
+            quote! {
+                    let __primary: u64;
+                    let __secondary: u64;
+                    unsafe {
+                        // Read parameters from registers
+                        core::arch::asm! (
+                            "mov {0}, r8",
+                            "mov {1}, r9",
+                            out(reg) __primary,
+                            out(reg) __secondary,
+                        );
+                    }
+                    let __input = #ty_transport::new(__primary, __secondary);
+                    use #foreign_shareable;
+                    let #var_params = match #ty_turbofish::from_transport(__input) {
+                        Ok(x) => x,
+                        Err(e) => #exit_with_code(e)
+                    };
 
+                    let #var_return = #fn_name(#var_params);
+            }
+        }
+        ParamType::MultipleValues { ty, packaging, .. } => {
+            quote! {
+                    let __primary: u64;
+                    let __secondary: u64;
 
-        // Wrapper function for #fn_name
-        #fn_vis fn #wrapper_fn_name(params: #struct_name) #fn_output {
-            #fn_name(#(#param_unpacking),*)
+                    unsafe {
+                        // Read parameters from registers
+                        core::arch::asm! (
+                            "mov {0}, r8",
+                            "mov {1}, r9",
+                            out(reg) __primary,
+                            out(reg) __secondary,
+                        );
+                    }
+                    let __input = #ty_transport::new(__primary, __secondary);
+                    use #foreign_shareable;
+                    let __foreign = match #foreign::<#ty>::from_transport(__input) {
+                        Ok(x) => x,
+                        Err(e) => #exit_with_code(e)
+                    };
+
+                    let (#(#packaging),*) = unsafe { __foreign.unpack() };
+                    let #var_return = #fn_name(#(#packaging),*);
+            }
         }
     };
 
-    TokenStream::from(expanded)
-}
-
-/// Extract the function parameters and their types
-fn extract_params(func: &ItemFn) -> Vec<(Ident, Type)> {
-    func.sig
-        .inputs
-        .iter()
-        .filter_map(|arg| {
-            if let FnArg::Typed(PatType { pat, ty, .. }) = arg {
-                if let Pat::Ident(pat_ident) = &**pat {
-                    Some((pat_ident.ident.clone(), (**ty).clone()))
-                } else {
-                    None
-                }
-            } else {
-                None
+    quote! {
+        #[unsafe(no_mangle)]
+        pub extern "C" fn #fn_name_wrapper() {
+            #func_call
+            use #owned_shareable;
+            let __output = #var_return.into_transport();
+            // Halt to indicate function exit and populate return registers
+            let __exit_code: u8 = #exit_code_return.into();
+            unsafe {
+                core::arch::asm! (
+                    "mov bl, {0}",
+                    "hlt",
+                    in(reg_byte) __exit_code,
+                    in("r8") __output.primary(),
+                    in("r9") __output.secondary(),
+                );
             }
-        })
-        .collect()
-}
-
-/// Process the function parameters and generate the struct fields and unpacking logic
-fn process_params(
-    params: &Vec<(Ident, Type)>,
-) -> Result<(StructFields, WherePreds, ParamUnpacking), syn::Error> {
-    // Resolve the BMVM commons crate and construct trait types
-    let crate_bmvm = find_crate("bmvm-common")?;
-    let trait_type = quote! {#crate_bmvm::registry::Type};
-    let trait_serializable = quote! {#crate_bmvm::registry::Serializable};
-
-    // fields used in the wrapper struct
-    let mut struct_fields = Vec::new();
-    // where conditions for trait bounds in the struct
-    let mut where_preds: Vec<WherePredicate> = Vec::new();
-    // statements to unpack the parameters from struct to function all
-    let mut param_unpacking = Vec::new();
-
-    // Process each parameter
-    for (name, ty) in params {
-        // Check if the type is an integer type or other Type impl
-        let is_type_impl = if let Type::Path(TypePath { path, .. }) = ty {
-            if let Some(segment) = path.segments.last() {
-                let ident = segment.ident.to_string();
-                matches!(
-                    ident.as_str(),
-                    "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" | "*const u8"
-                )
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
-        if is_type_impl {
-            // For Type-implementing parameters, add them directly
-            struct_fields.push(quote! { pub #name: #ty });
-            param_unpacking.push(quote! { params.#name });
-            where_preds.push(parse_quote!(#ty: #trait_type));
-        } else {
-            // For Serializable parameters, add pointer and size fields
-            let ptr_name = format_ident!("{}_ptr", name);
-            let size_name = format_ident!("{}_size", name);
-
-            // Add the pointer and size fields to the struct
-            struct_fields.push(quote! { pub #ptr_name: *const u8 });
-            struct_fields.push(quote! { pub #size_name: u32 });
-
-            // Add Type trait bounds for the pointer and size
-            where_preds.push(parse_quote!(*const u8: #trait_type));
-            where_preds.push(parse_quote!(u32: #trait_type));
-
-            // Generate the parameter unpacking logic - converting raw pointer back to the serializable type
-            param_unpacking.push(quote! {
-                {
-                    // Only proceed if the pointer is not null and size > 0
-                    if !params.#ptr_name.is_null() && params.#size_name > 0 {
-                        // Create a slice from the pointer and size
-                        let bytes = unsafe {
-                            core::slice::from_raw_parts(params.#ptr_name, params.#size_name as usize)
-                        };
-
-                        // Deserialize the slice back to the original type
-                        #trait_serializable::from_bytes(bytes)
-                    } else {
-                        // Handle null pointer or zero size case
-                        panic!("Null pointer or zero size for parameter {}", stringify!(#name));
-                    }
-                }
-            });
         }
     }
-
-    Ok((struct_fields, where_preds, param_unpacking))
-}
-
-/// Try finding the crate by name to e.g.: generate a proper import statement.
-fn find_crate(src: &str) -> Result<Ident, syn::Error> {
-    let found_crate = crate_name(src);
-    if found_crate.is_err() {
-        return Err(syn::Error::new_spanned(
-            src,
-            format!(
-                "Crate {} could not be found. Make sure to include it in your Cargo.toml",
-                src
-            ),
-        ));
-    }
-
-    let found_crate = found_crate.unwrap();
-    Ok(match found_crate {
-        FoundCrate::Itself => Ident::new("crate", Span2::call_site()),
-        FoundCrate::Name(name) => Ident::new(&name, Span2::call_site()),
-    })
-}
-
-/// build the suffix for generated function and struct names based on the calling span
-fn suffix() -> String {
-    let span = Span::call_site();
-    let mut hasher = Djb264::new();
-    hasher.write(span.file().as_bytes());
-    hasher.write(span.line().to_string().as_bytes());
-    hasher.write(span.column().to_string().as_bytes());
-    let hash = hasher.finish();
-    format!("{:x}", hash)
 }

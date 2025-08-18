@@ -1,18 +1,32 @@
 #![no_std]
 #![no_main]
 
-use bmvm_guest::{entry, expose, host};
+use bmvm_guest::{Foreign, SharedBuf, alloc_buf, expose};
+use bmvm_guest::{TypeSignature, host, setup};
+
+#[repr(transparent)]
+#[derive(TypeSignature)]
+struct Foo(Bar);
+
+#[repr(C)]
+#[derive(TypeSignature)]
+struct Bar {
+    a: u32,
+    b: u32,
+}
 
 #[host]
 unsafe extern "C" {
-    fn foo(func: u32, args: u32);
+    fn x(a: Foo, b: i32) -> Foreign<Bar>;
 }
 
 #[expose]
-fn bar(a: u32) {}
+fn foo(a: u32, b: Foreign<Foo>) -> SharedBuf {
+    let mut buf = unsafe { alloc_buf(16) }.ok().unwrap();
+    let b = buf.as_mut();
+    b.copy_from_slice(&a.to_le_bytes());
+    buf.into_shared()
+}
 
-#[expose]
-fn baz(a: u32) {}
-
-#[entry]
+#[setup]
 fn main() {}

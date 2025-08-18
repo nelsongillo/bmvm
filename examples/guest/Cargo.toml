@@ -1,14 +1,14 @@
 [package]
-name = "kvm_guest_sample"
+name = "guest"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bmvm-guest = {path = "../../bmvm_guest" }
-bmvm-common = {path = "../../bmvm_common", default-features = false}
+bmvm-guest = {path = "../../bmvm_guest", features = ["setup"]}
 
 [profile.dev]
 panic = "abort"
 
 [profile.release]
 panic = "abort"
+lto = false

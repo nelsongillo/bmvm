@@ -13,7 +13,7 @@ fn main() {
     for entry in std::fs::read_dir("link").unwrap() {
         let entry = entry.unwrap();
         let src = entry.path();
-        let dst = out.join(&src.file_name().unwrap());
+        let dst = out.join(src.file_name().unwrap());
 
         println!("cargo:rerun-if-changed={}", &src.display());
         std::fs::copy(&src, &dst).unwrap();

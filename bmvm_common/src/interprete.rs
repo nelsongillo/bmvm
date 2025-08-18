@@ -1,5 +1,6 @@
+#[cfg(feature = "vmi-consume")]
 use core::fmt::{Debug, Display};
-#[cfg(feature = "std")]
+#[cfg(feature = "vmi-consume")]
 use std::fmt::Formatter;
 
 pub trait Zero {
@@ -12,43 +13,41 @@ pub enum InterpretError {
     Misaligned(usize, usize),
 }
 
-#[cfg(feature = "std")]
+#[cfg(feature = "vmi-consume")]
 impl Debug for InterpretError {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
             InterpretError::TooSmall(want, got) => {
                 write!(
                     f,
-                    "provided slice was to small: expected {} but got {}",
-                    want, got
+                    "provided slice was to small: expected {want} but got {got}",
                 )
             }
             InterpretError::Misaligned(want, got) => {
-                write!(f, "misaligned pointer: expected {} but got {}", want, got)
+                write!(f, "misaligned pointer: expected {want} but got {got}")
             }
         }
     }
 }
 
-#[cfg(feature = "std")]
+#[cfg(feature = "vmi-consume")]
 impl Display for InterpretError {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
             InterpretError::TooSmall(want, got) => {
                 write!(
                     f,
-                    "provided slice was to small: expected {} but got {}",
-                    want, got
+                    "provided slice was to small: expected {want} but got {got}"
                 )
             }
             InterpretError::Misaligned(want, got) => {
-                write!(f, "misaligned pointer: expected {} but got {}", want, got)
+                write!(f, "misaligned pointer: expected {want} but got {got}")
             }
         }
     }
 }
 
-#[cfg(feature = "std")]
+#[cfg(feature = "vmi-consume")]
 impl core::error::Error for InterpretError {}
 
 pub trait Interpret: Sized {

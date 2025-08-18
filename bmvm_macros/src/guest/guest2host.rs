@@ -1,13 +1,16 @@
-use anyhow::anyhow;
-use bmvm_common::BMVM_META_SECTION;
-use bmvm_common::meta::{CallMeta, DataType};
+use crate::common::{
+    CallDirection, MOTHER_CRATE, VAR_NAME_TRANSPORT, construct_idents, create_fn_call,
+    extract_params, gen_callmeta, process_params, suffix,
+};
+use crate::common::{find_crate, get_link_name};
+use crate::guest::{ParamType, VAR_NAME_PARAM, gen_call_meta_debug, make_type_turbofish};
+use bmvm_common::BMVM_META_SECTION_HOST;
 use proc_macro::TokenStream;
-use quote::{format_ident, quote};
+use proc_macro2::{Ident, Span, TokenStream as TS};
+use quote::quote;
+use syn::Error;
 use syn::spanned::Spanned;
-use syn::{Attribute, ForeignItem, ForeignItemFn, ItemForeignMod, Meta, parse_macro_input};
-use syn::{Error, Type, TypePath, TypeReference, TypeSlice};
-
-const BMVM_META_STATIV_PREFIX: &str = "BMVM_CALL_META_";
+use syn::{ForeignItem, ItemForeignMod, parse_macro_input};
 
 pub fn host_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // Parse the input as a foreign module (extern block)
@@ -28,146 +31,182 @@ pub fn host_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
         .into();
     }
 
+    // bmvm-(guest|host) crate
+    let mother = match find_crate(MOTHER_CRATE) {
+        Ok(x) => x,
+        Err(e) => return e.to_compile_error().into(),
+    };
+
     // Process each function in the extern block
     let stubs = foreign_mod.items.iter().filter_map(|item| match item {
         ForeignItem::Fn(func) => {
-            let meta = create_callmeta(func);
-            if meta.is_err() {
-                return Error::new(func.span(), meta.err().unwrap().to_string())
+            let fn_name = get_link_name(&func.attrs).unwrap_or_else(|| func.sig.ident.clone());
+
+            // vmi metadata generation
+            let fn_call = create_fn_call(&func.attrs, &func.sig);
+            if fn_call.is_err() {
+                return Error::new(func.span(), fn_call.err().unwrap().to_string())
                     .to_compile_error()
                     .into();
             }
+            let (fn_call, params, return_type) = fn_call.unwrap();
 
-            let call = meta.unwrap();
-            let meta = gen_callmeta(func, &call);
-            let stub = gen_stub(func, &call);
+            // generate call meta static data
+            let callmeta = match gen_callmeta(
+                fn_call,
+                params,
+                return_type,
+                fn_name.to_string().as_str(),
+                BMVM_META_SECTION_HOST,
+            ) {
+                Ok(x) => x,
+                Err(e) => return e.to_compile_error().into(),
+            };
+
+            let (_, transport_struct, _) = construct_idents(&fn_name, suffix().as_str());
+
+            // Parameter processing
+            let params = extract_params(&func.sig);
+            let param_type = match process_params(
+                &mother,
+                &transport_struct,
+                &params,
+                Some(CallDirection::Guest2Host),
+            ) {
+                Ok(x) => x,
+                Err(e) => return e.to_compile_error().into(),
+            };
+
+            // optional transport struct definition
+            let def_transport_struct = match &param_type {
+                ParamType::MultipleValues {
+                    struct_definition, ..
+                } => struct_definition.clone(),
+                _ => quote! {},
+            };
+
+            // function construction
+            let fn_vis = &func.vis;
+            let fn_params = &func.sig.inputs;
+            let (fn_return, turbofish_return_type, union_return) = match &func.sig.output {
+                syn::ReturnType::Default => (quote! {()}, quote! {()}, true),
+                syn::ReturnType::Type(_, ty) => {
+                    (quote! {#ty}, make_type_turbofish(&*ty.clone()), false)
+                }
+            };
+            let transport = gen_transport(&mother, &param_type);
+            let body = gen_body(
+                &mother,
+                &turbofish_return_type,
+                &callmeta.sig,
+                transport,
+                union_return,
+            )
+            .unwrap();
+            let where_clause = if let ParamType::Value { ensure_trait, .. } = &param_type {
+                quote! {where #ensure_trait}
+            } else {
+                quote! {}
+            };
+            // TokenStream containing the static defs for FnCall etc
+            let meta = callmeta.token;
+
             Some(quote! {
                 #meta
-                #stub
+                #def_transport_struct
+
+                #fn_vis fn #fn_name(#fn_params) -> #fn_return
+                #where_clause
+                {
+                    #body
+                }
             })
         }
         _ => None,
     });
 
+    // optional one time debug segment for the whole block
+    let debug = gen_call_meta_debug();
     // Combine all the stubs and generate the final output
     let expanded = quote! {
+        #debug
         #(#stubs)*
     };
 
     TokenStream::from(expanded)
 }
 
-/// gen_stub generates the call to the hypercall implementation
-fn gen_stub(func: &ForeignItemFn, meta: &CallMeta) -> proc_macro2::TokenStream {
-    let vis = &func.vis;
-    let sig = &func.sig;
-    let ident = &sig.ident;
+/// Generate code which reads EBX register for the offset ptr and builds the Foreign<T> for
+/// the function params
+fn gen_body(
+    mother: &Ident,
+    ty_return: &TS,
+    sig: &Ident,
+    transport: TS,
+    uinion_return: bool,
+) -> Result<TS, Error> {
+    let foreign_shareable = quote! {#mother::ForeignShareable};
+    let exit_with_code = quote! {#mother::exit_with_code};
+    let execute = quote! {#mother::hypercall};
+    let var_transport = Ident::new(VAR_NAME_TRANSPORT, Span::call_site());
 
-    let call_id = meta.id();
-
-    // Generate the stub implementation
-    quote! {
-        #vis #sig{
-            exec_hypercall(#call_id);
+    let body = if uinion_return {
+        quote! {
+            #transport
+            unsafe { #execute(#sig, #var_transport); }
         }
-    }
-}
-
-/// gen_callmeta generates the static data to be embedded in the executable
-fn gen_callmeta(func: &ForeignItemFn, meta: &CallMeta) -> proc_macro2::TokenStream {
-    let fn_name = get_link_name(&func.attrs).unwrap_or_else(|| func.sig.ident.to_string());
-
-    let meta_name = format_ident!("{}{}", BMVM_META_STATIV_PREFIX, fn_name.to_uppercase());
-
-    // Get the CallMeta as bytes and prefix with the size (u16)
-    let mut meta_bytes = meta.as_bytes();
-    let size = meta_bytes.len();
-    let size_bytes = (size as u16).to_ne_bytes();
-
-    // Combine the size and the bytes and generate the final output
-    let mut bytes = size_bytes.to_vec();
-    bytes.append(&mut meta_bytes);
-    let final_size = bytes.len();
-    quote! {
-        #[used]
-        #[unsafe(link_section = #BMVM_META_SECTION)]
-        static #meta_name: [u8; #final_size] = [
-            #(#bytes),*
-        ];
-    }
-}
-
-/// create_callmeta tries to build the `CallMeta` struct from the foreign function definition
-fn create_callmeta(func: &ForeignItemFn) -> anyhow::Result<CallMeta> {
-    let fn_name = get_link_name(&func.attrs).unwrap_or_else(|| func.sig.ident.to_string());
-    let fn_args = &func.sig.inputs;
-
-    let mut type_codes = Vec::new();
-
-    for arg in fn_args.iter() {
-        if let syn::FnArg::Typed(pat_type) = arg {
-            let ty = &pat_type.ty;
-            let code = try_datatype_from_type(*ty.clone());
-            if code.is_err() {
-                return Err(anyhow!(code.err().unwrap().to_string()));
-            }
-            type_codes.push(code.unwrap());
-        }
-    }
-
-    CallMeta::new(type_codes, fn_name.as_str())
-}
-
-/// get_link_name either returns the function name or the name specified via a `link_name` attribute
-fn get_link_name(attrs: &[Attribute]) -> Option<String> {
-    for attr in attrs {
-        if attr.path().is_ident("link_name") {
-            if let Meta::NameValue(link_name) = &attr.meta {
-                Some(link_name);
+    } else {
+        quote! {
+            #transport
+            let result = unsafe { #execute(#sig, #var_transport) };
+            use #foreign_shareable;
+            return match #ty_return::from_transport(result) {
+                Ok(ret) => ret,
+                Err(e) => #exit_with_code(e),
             }
         }
-    }
-    None
+    };
+    Ok(body)
 }
 
-fn try_datatype_from_type(ty: Type) -> Result<DataType, &'static str> {
-    match ty {
-        // Match simple types like u32, i8, etc.
-        Type::Path(TypePath { path, .. }) => {
-            if let Some(ident) = path.get_ident() {
-                match ident.to_string().as_str() {
-                    "u8" => Ok(DataType::UInt8),
-                    "u16" => Ok(DataType::UInt16),
-                    "u32" => Ok(DataType::UInt32),
-                    "u64" => Ok(DataType::UInt64),
-                    "i8" => Ok(DataType::Int8),
-                    "i16" => Ok(DataType::Int16),
-                    "i32" => Ok(DataType::Int32),
-                    "i64" => Ok(DataType::Int64),
-                    "f32" => Ok(DataType::Float32),
-                    "f64" => Ok(DataType::Float64),
-                    _ => Err("Unsupported type"),
-                }
-            } else {
-                Err("Unsupported type")
+fn gen_transport(mother: &Ident, param: &ParamType) -> TS {
+    let alloc_owned = quote! {#mother::alloc};
+    let exit_with_code = quote! {#mother::exit_with_code};
+    let exit_code_alloc = quote! {#mother::ExitCode::AllocatorFailed};
+    let owned_shareable = quote! {#mother::OwnedShareable};
+    let transport = Ident::new(VAR_NAME_TRANSPORT, Span::call_site());
+    let params = Ident::new(VAR_NAME_PARAM, Span::call_site());
+
+    match param {
+        ParamType::Void => {
+            quote! {
+                use #owned_shareable;
+                let #transport = ().into_transport();
             }
         }
-
-        // Match references: &T or &mut T
-        Type::Reference(TypeReference { elem, .. }) => match *elem {
-            // Match &[u8]
-            Type::Slice(TypeSlice { elem, .. }) => {
-                if let Type::Path(TypePath { path, .. }) = *elem {
-                    if let Some(ident) = path.get_ident() {
-                        if ident == "u8" {
-                            return Ok(DataType::Bytes);
-                        }
-                    }
-                }
-                Err("Unsupported type")
+        ParamType::Value { name, .. } => {
+            quote! {
+                use #owned_shareable;
+                let #transport = #name.into_transport();
             }
-            _ => Err("Unsupported type"),
-        },
-        _ => Err("Unsupported type"),
+        }
+        ParamType::MultipleValues {
+            ty: struct_ident,
+            packaging,
+            ..
+        } => {
+            quote! {
+                let mut owned_params = match unsafe { #alloc_owned::<#struct_ident>() } {
+                    Ok(m) => m,
+                    Err(_) => #exit_with_code(#exit_code_alloc),
+                };
+                let mut #params = owned_params.as_mut();
+                #(#packaging)*
+
+                let shared_params = owned_params.into_shared();
+                use #owned_shareable;
+                let #transport = shared_params.into_transport();
+            }
+        }
     }
 }

@@ -7,5 +7,8 @@ members = [
     "examples/guest",
     "bmvm_macros",
     "examples/host",
+    "examples/host-expand",
     "examples/longmode",
+    "tooling/printlayout",
+    "tooling/vmi-inspect",
 ]

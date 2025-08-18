@@ -4,13 +4,22 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-std = ["anyhow", "memchr"]
+vmi-debug = []
+vmi-no-debug = []
+vmi-execute = []
+vmi-consume = ["kvm-bindings", "thiserror", "anyhow", "memchr", "inventory"]
+vmi-macro = ["thiserror", "anyhow", "memchr", "inventory"]
 
 [dependencies]
 bitflags = "2.9.1"
+lock_api = "0.4.13"
 sealed = "0.6.0"
+spin = { version = "0.10.0", default-features = false, features = ["once", "mutex", "spin_mutex", "lock_api"] }
+talc = "4.4.3"
+x86_64 = "0.15.2"
+
 anyhow = { version = "1.0.98", optional = true }
 memchr = { version = "2.7.4", optional = true }
-serde = { version = "1.0.219", default-features = false, features = ["derive"] }
-x86_64 = "0.15.2"
-spin = "0.10.0"
+kvm-bindings = { version = "0.13.0", optional = true }
+thiserror = { version = "2.0.12", optional = true }
+inventory = { version = "0.3.20", optional = true }

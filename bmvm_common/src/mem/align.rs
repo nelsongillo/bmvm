@@ -1,14 +1,47 @@
+use core::marker::PhantomData;
 use core::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
-use std::marker::PhantomData;
+
+/// Align address downwards.
+///
+/// Returns the greatest `x` with alignment `align` so that `x <= addr`.
+///
+/// Panics if the alignment is not a power of two.
+#[inline]
+const fn align_down(addr: u64, align: u64) -> u64 {
+    assert!(align.is_power_of_two(), "`align` must be a power of two");
+    let mask = align - 1;
+    if addr & mask == 0 {
+        return addr;
+    }
+    addr & !(align - 1)
+}
+
+/// Align address upwards.
+///
+/// Returns the smallest `x` with alignment `align` so that `x >= addr`.
+///
+/// Panics if the alignment is not a power of two or if an overflow occurs.
+#[inline]
+const fn align_up(addr: u64, align: u64) -> u64 {
+    assert!(align.is_power_of_two(), "`align` must be a power of two");
+    let mask = align - 1;
+    if addr & mask == 0 {
+        return addr;
+    }
+
+    (addr | mask)
+        .checked_add(1)
+        .expect("attempt to add with overflow")
+}
 
 /// This is a quick const wrapper for the DefaultAlign::align_floor function
 pub const fn align_floor(addr: u64) -> u64 {
-    x86_64::align_down(addr, DefaultAlign::ALIGNMENT)
+    align_down(addr, DefaultAlign::ALIGNMENT)
 }
 
 /// This is a quick const wrapper for the DefaultAlign::align_ceil function
 pub const fn align_ceil(addr: u64) -> u64 {
-    x86_64::align_up(addr, DefaultAlign::ALIGNMENT)
+    align_up(addr, DefaultAlign::ALIGNMENT)
 }
 
 /// Trait to abstract over different page sizes based on the underlying architecture.
@@ -70,6 +103,12 @@ impl Align for Page1GiB {
     const ALIGNMENT: u64 = Page2MiB::ALIGNMENT * 512;
 }
 
+#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Stack;
+impl Align for Stack {
+    const ALIGNMENT: u64 = 16;
+}
+
 /// Aligned non-zero integer wrapper
 #[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
@@ -82,6 +121,7 @@ pub struct AlignedNonZero<I, A: Align = DefaultAlign> {
 macro_rules! impl_aligned_non_zero {
     ($($int:ty => $nonzero:ty => $aligned_name:ident),* $(,)?) => {
         $(
+        #[allow(type_alias_bounds)]
         /// Aligned non-zero type for $int
         pub type $aligned_name<A: Align = DefaultAlign> = AlignedNonZero<$nonzero, A>;
 
@@ -105,10 +145,10 @@ macro_rules! impl_aligned_non_zero {
             }
 
             /// Creates from already aligned non-zero value
-            pub fn new_aligned(value: $nonzero) -> Option<Self> {
-                if A::is_aligned(value.get() as u64) {
-                    Some(Self {
-                        inner: value,
+            pub fn new_aligned(value: $int) -> Option<Self> {
+                if A::is_aligned(value as u64) {
+                    <$nonzero>::new(value).map(|inner| Self {
+                        inner,
                         _alignment: PhantomData,
                     })
                 } else {
@@ -116,13 +156,27 @@ macro_rules! impl_aligned_non_zero {
                 }
             }
 
+            pub const fn new_unchecked(value: $nonzero) -> Self {
+                Self {
+                    inner: value,
+                    _alignment: PhantomData,
+                }
+            }
+
+            pub const unsafe fn new_unchecked_raw(value: $int) -> Self {
+                Self {
+                    inner: unsafe { <$nonzero>::new_unchecked(value) },
+                    _alignment: PhantomData,
+                }
+            }
+
             /// Returns the inner value
-            pub fn get(&self) -> $int {
+            pub const fn get(&self) -> $int {
                 self.inner.get()
             }
 
             /// Returns the raw NonZero value
-            pub fn get_non_zero(self) -> $nonzero {
+            pub const fn get_non_zero(self) -> $nonzero {
                 self.inner
             }
         }
