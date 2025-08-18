@@ -2,7 +2,6 @@ use bmvm_common::error::ExitCode;
 use bmvm_common::interprete::{Interpret, InterpretError};
 use bmvm_common::mem::{Align, Arena, Flags, LayoutTable, Page4KiB};
 use bmvm_common::{BMVM_MEM_LAYOUT_TABLE, mem};
-use core::arch::asm;
 
 /// Parse the memory info structure and initialize the paging system etc.
 #[inline(always)]

@@ -124,8 +124,8 @@ fn gen_wrapper(mother: &Ident, fn_name: &Ident, fn_name_wrapper: &Ident, params:
                     unsafe {
                         // Read parameters from registers
                         core::arch::asm! (
-                            "mov r8, {0}",
-                            "mov r9, {1}",
+                            "mov {0}, r8",
+                            "mov {1}, r9",
                             out(reg) __primary,
                             out(reg) __secondary,
                         );
@@ -148,8 +148,8 @@ fn gen_wrapper(mother: &Ident, fn_name: &Ident, fn_name_wrapper: &Ident, params:
                     unsafe {
                         // Read parameters from registers
                         core::arch::asm! (
-                            "mov r8, {0}",
-                            "mov r9, {1}",
+                            "mov {0}, r8",
+                            "mov {1}, r9",
                             out(reg) __primary,
                             out(reg) __secondary,
                         );
@@ -177,7 +177,7 @@ fn gen_wrapper(mother: &Ident, fn_name: &Ident, fn_name_wrapper: &Ident, params:
             let __exit_code: u8 = #exit_code_return.into();
             unsafe {
                 core::arch::asm! (
-                    "mov {0}, bl",
+                    "mov bl, {0}",
                     "hlt",
                     in(reg_byte) __exit_code,
                     in("r8") __output.primary(),

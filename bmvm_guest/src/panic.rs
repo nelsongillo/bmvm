@@ -1,10 +1,21 @@
 use bmvm_common::error::ExitCode;
+use bmvm_common::mem::VirtAddr;
 use core::arch::asm;
 use core::panic::PanicInfo;
 
 #[panic_handler]
 pub fn panic(_info: &PanicInfo) -> ! {
-    panic_with_code(ExitCode::Unmapped(u8::MAX));
+    let rip: u64;
+
+    unsafe {
+        asm!(
+        "mov {}, [rbp + 8]",
+        out(reg) rip,
+        options(nostack, nomem)
+        );
+    }
+
+    panic_with_code(ExitCode::Panic(VirtAddr::new_unchecked(rip)));
     loop {}
 }
 
@@ -41,6 +52,7 @@ fn write_additional_values(code: &ExitCode) {
         match code {
             ExitCode::UnknownUpcall(sig) => asm!("mov rbx, {}", in(reg) sig),
             ExitCode::Unmapped(c) => asm!("mov bl, {}", in(reg_byte) c.clone()),
+            ExitCode::Panic(addr) => asm!("mov rbx, {}", in(reg) addr.as_u64()),
             _ => {}
         }
     }

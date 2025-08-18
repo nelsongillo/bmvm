@@ -1,6 +1,8 @@
 use crate::TypeSignature;
 use crate::error::ExitCode;
-use crate::mem::{Foreign, ForeignBuf, OffsetPtr, RawOffsetPtr, Shared, SharedBuf, get_foreign};
+use crate::mem::{
+    Error as MemError, Foreign, ForeignBuf, OffsetPtr, RawOffsetPtr, Shared, SharedBuf, get_foreign,
+};
 use core::num::NonZeroUsize;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -68,7 +70,13 @@ impl<T: TypeSignature> ForeignShareable for Foreign<T> {
     fn from_transport(t: Transport) -> Result<Self, ExitCode> {
         let raw = RawOffsetPtr::from(t.primary as u32);
         let ptr = OffsetPtr::from(raw);
-        unsafe { get_foreign(ptr).map_err(|_| ExitCode::Ptr(raw)) }
+        unsafe {
+            get_foreign(ptr).map_err(|e| match e {
+                MemError::UninitializedAllocator => ExitCode::NullPtr,
+                MemError::NullPointer => ExitCode::NullPtr,
+                _ => ExitCode::Ptr(raw),
+            })
+        }
     }
 }
 

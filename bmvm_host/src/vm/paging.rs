@@ -3,7 +3,7 @@ use bmvm_common::mem::{
     Align, AlignedNonZeroUsize, Flags, LayoutTableEntry, Page1GiB, Page2MiB, Page4KiB, PhysAddr,
     VirtAddr, aligned_and_fits,
 };
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::fmt::{Debug, Display};
 use std::num::NonZeroUsize;
 use std::slice;
@@ -46,7 +46,7 @@ pub struct Page {
 pub struct PagingArena<'a> {
     allocator: &'a Allocator,
     regions: Vec<Region<ReadWrite>>, // (region, has been self mapped)
-    pages: HashMap<PhysAddr, Page>,
+    pages: FxHashMap<PhysAddr, Page>,
     current: usize,
     offset: usize,
     remaining: usize,
@@ -68,7 +68,7 @@ impl<'a> PagingArena<'a> {
             .alloc_accessible::<ReadWrite>(capactity)?
             .set_guest_addr(pml4);
         let regions = vec![base];
-        let mut pages = HashMap::new();
+        let mut pages = FxHashMap::default();
         pages.insert(
             pml4,
             Page {
@@ -281,7 +281,6 @@ pub(super) fn setup(
     // Map the paging tables as well
     let mut arena_layout = arena.layout();
     while arena_layout.len() > 0 {
-        log::debug!("Mapping {} paging tables", arena_layout.len());
         setup_impl(&mut arena, entries, pml4)?;
         arena_layout = arena.layout();
     }
@@ -299,11 +298,9 @@ fn setup_impl(
         let mut vaddr = layout_entry.vaddr();
         let end = vaddr + layout_entry.size() - 1;
         let flags = layout_entry.flags();
-        log::debug!("Mapping Phys {paddr:X} to {vaddr:X} - {end:x} with flags {flags:?}",);
         while vaddr < end {
             match () {
                 _ if aligned_and_fits::<Page1GiB>(vaddr.as_u64(), end.as_u64()) => {
-                    // log::debug!("Mapping 1GiB page at {:x}", vaddr.as_u64());
                     let pdpt = write_idx(&mut arena, paddr, pml4, vaddr.p4_index(), flags)?;
 
                     // Handle leaf entry
@@ -314,7 +311,6 @@ fn setup_impl(
                     vaddr += Page1GiB::ALIGNMENT;
                 }
                 _ if aligned_and_fits::<Page2MiB>(vaddr.as_u64(), end.as_u64()) => {
-                    // log::debug!("Mapping 2MiB page at {:x}", vaddr.as_u64());
                     let pdpt = write_idx(&mut arena, paddr, pml4, vaddr.p4_index(), flags)?;
                     let pd = write_idx(&mut arena, paddr, pdpt, vaddr.p3_index(), flags)?;
 
@@ -326,7 +322,6 @@ fn setup_impl(
                     vaddr += Page2MiB::ALIGNMENT;
                 }
                 _ => {
-                    // log::debug!("Mapping 4KiB page at {:x}", vaddr.as_u64());
                     let pdpt = write_idx(&mut arena, paddr, pml4, vaddr.p4_index(), flags)?;
                     let pd = write_idx(&mut arena, paddr, pdpt, vaddr.p3_index(), flags)?;
                     let pt = write_idx(&mut arena, paddr, pd, vaddr.p2_index(), flags)?;
@@ -360,8 +355,6 @@ fn get_at(table: &[u8], idx: usize) -> Result<PageEntry> {
 /// Write a page entry to the table at the given index.
 #[inline]
 fn write_at(table: &mut [u8], idx: usize, entry: PageEntry) -> Result<()> {
-    log::debug!("Index: {idx} - Entry {entry}");
-
     let offset = idx * size_of::<PageEntry>();
     if offset + size_of::<u64>() > table.len() {
         return Err(Error::IndexOutOfBounds(idx));

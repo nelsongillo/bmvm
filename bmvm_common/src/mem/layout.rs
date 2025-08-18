@@ -315,10 +315,11 @@ impl LayoutTableEntry {
         LayoutTableEntry(0)
     }
 
-    pub fn set_present(mut self, present: bool) -> Self {
+    pub fn set_present(self, present: bool) -> Self {
         let mut flags = self.flags();
         flags.set(Flags::PRESENT, present);
-        self.set_flags(flags)
+        self.set_flags(flags);
+        self
     }
 
     pub const fn set_flags(mut self, flags: Flags) -> Self {

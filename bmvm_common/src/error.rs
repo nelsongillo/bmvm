@@ -1,4 +1,4 @@
-use crate::mem::RawOffsetPtr;
+use crate::mem::{RawOffsetPtr, VirtAddr};
 use crate::vmi::Signature;
 use x86_64::structures::paging::PageSize;
 use x86_64::structures::paging::mapper::MapToError;
@@ -19,6 +19,8 @@ pub enum ExitCode {
     /// An invalid offset pointer was provided
     #[cfg_attr(feature = "vmi-consume", error("Invalid offset pointer {0:x}"))]
     Ptr(RawOffsetPtr),
+    #[cfg_attr(feature = "vmi-consume", error("Null pointer"))]
+    NullPtr,
     /// Allocation failed
     #[cfg_attr(feature = "vmi-consume", error("Allocation failed"))]
     AllocatorFailed,
@@ -66,6 +68,9 @@ pub enum ExitCode {
     #[cfg_attr(feature = "vmi-consume", error("Buffer capacity is ZERO"))]
     ZeroCapacity,
     /// The given exit code is not mapped to an enum variant.
+    #[cfg_attr(feature = "vmi-consume", error("Panic"))]
+    Panic(VirtAddr),
+    /// The given exit code is not mapped to an enum variant.
     #[cfg_attr(feature = "vmi-consume", error("Unmapped exit code: {0}"))]
     Unmapped(u8),
 }
@@ -85,6 +90,7 @@ impl ExitCode {
                 ExitCode::UnknownUpcall(sig) => core::arch::asm!("mov rbx, {}", in(reg) sig),
                 ExitCode::Unmapped(code) => core::arch::asm!("mov bl, {}", in(reg_byte) code),
                 ExitCode::Ptr(ptr) => core::arch::asm!("mov ebx, {0:e}", in(reg) ptr.as_u32()),
+                ExitCode::Panic(addr) => core::arch::asm!("mov rbx, {0}", in(reg) addr.as_u64()),
                 _ => {}
             }
         }
@@ -103,6 +109,10 @@ impl ExitCode {
             ExitCode::UnknownUpcall(_) => {
                 let sig: Signature = regs.rbx;
                 ExitCode::UnknownUpcall(sig)
+            }
+            ExitCode::Panic(_) => {
+                let addr: VirtAddr = VirtAddr::new(regs.rbx as u64);
+                ExitCode::Panic(addr)
             }
             ExitCode::Unmapped(_) => {
                 let code: u8 = (regs.rbx & 0xFF) as u8;
@@ -130,15 +140,17 @@ impl From<u8> for ExitCode {
             1 => ExitCode::Ready,
             2 => ExitCode::Return,
             3 => ExitCode::Ptr(RawOffsetPtr::from(value as u32)),
-            4 => ExitCode::AllocatorFailed,
-            5 => ExitCode::InvalidMemoryLayoutTableTooSmall,
-            6 => ExitCode::InvalidMemoryLayoutTableMisaligned,
-            7 => ExitCode::InvalidMemoryLayout,
-            8 => ExitCode::FrameAllocationFailed,
-            9 => ExitCode::ParentEntryHugePage,
-            10 => ExitCode::PageAlreadyMapped,
-            11 => ExitCode::UnknownUpcall(Signature::from(value)),
-            12 => ExitCode::ZeroCapacity,
+            4 => ExitCode::NullPtr,
+            5 => ExitCode::AllocatorFailed,
+            6 => ExitCode::InvalidMemoryLayoutTableTooSmall,
+            7 => ExitCode::InvalidMemoryLayoutTableMisaligned,
+            8 => ExitCode::InvalidMemoryLayout,
+            9 => ExitCode::FrameAllocationFailed,
+            10 => ExitCode::ParentEntryHugePage,
+            11 => ExitCode::PageAlreadyMapped,
+            12 => ExitCode::UnknownUpcall(Signature::from(value)),
+            13 => ExitCode::ZeroCapacity,
+            254 => ExitCode::Panic(VirtAddr::new_unchecked(value as u64)),
             v => ExitCode::Unmapped(v),
         }
     }
@@ -151,15 +163,17 @@ impl Into<u8> for ExitCode {
             ExitCode::Ready => 1,
             ExitCode::Return => 2,
             ExitCode::Ptr(_) => 3,
-            ExitCode::AllocatorFailed => 4,
-            ExitCode::InvalidMemoryLayoutTableTooSmall => 5,
-            ExitCode::InvalidMemoryLayoutTableMisaligned => 6,
-            ExitCode::InvalidMemoryLayout => 7,
-            ExitCode::FrameAllocationFailed => 8,
-            ExitCode::ParentEntryHugePage => 9,
-            ExitCode::PageAlreadyMapped => 10,
-            ExitCode::UnknownUpcall(_) => 11,
-            ExitCode::ZeroCapacity => 12,
+            ExitCode::NullPtr => 4,
+            ExitCode::AllocatorFailed => 5,
+            ExitCode::InvalidMemoryLayoutTableTooSmall => 6,
+            ExitCode::InvalidMemoryLayoutTableMisaligned => 7,
+            ExitCode::InvalidMemoryLayout => 8,
+            ExitCode::FrameAllocationFailed => 9,
+            ExitCode::ParentEntryHugePage => 10,
+            ExitCode::PageAlreadyMapped => 11,
+            ExitCode::UnknownUpcall(_) => 12,
+            ExitCode::ZeroCapacity => 13,
+            ExitCode::Panic(_) => 254,
             ExitCode::Unmapped(value) => value,
         }
     }

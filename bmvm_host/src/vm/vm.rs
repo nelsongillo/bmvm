@@ -17,7 +17,7 @@ use bmvm_common::mem::{
 use bmvm_common::registry::Params;
 use bmvm_common::vmi::{ForeignShareable, Transport};
 use bmvm_common::{BMVM_MEM_LAYOUT_TABLE, HYPERCALL_IO_PORT};
-use kvm_bindings::KVM_API_VERSION;
+use kvm_bindings::{KVM_API_VERSION, kvm_regs};
 use kvm_ioctls::{Cap, Kvm, VcpuExit, VmFd};
 use std::io::Write;
 use std::num::NonZeroUsize;
@@ -64,6 +64,8 @@ pub enum Error {
     Setup(#[from] setup::Error),
     #[error("Allocator error: {0}")]
     Allocator(#[from] crate::alloc::Error),
+    #[error("Guest exited with unhandled exit code: {0}")]
+    UnhandledHalt(ExitCode),
     #[error("Unexpected exit reason: See logs for details")]
     UnexpectedExit,
 }
@@ -195,8 +197,14 @@ impl Vm {
     where
         R: ForeignShareable,
     {
-        log::debug!("executing vm");
+        log::debug!("VM Execution");
+        self.state = State::Executing;
         loop {
+            // Single Step through the guest in debug mode
+            if self.cfg.debug {
+                self.vcpu.enable_single_step().map_err(Error::Vcpu)?
+            }
+
             match self.vcpu.run()? {
                 // IO Out should only be triggered by the hypercall
                 // execute hypercall or log warning otherwise
@@ -220,7 +228,7 @@ impl Vm {
                             self.state = State::Shutdown;
                         }
                         ExitCode::Ready => {
-                            log::info!("guest setup finished");
+                            log::info!("Guest Setup done, ready to execute");
                             self.state = State::Ready;
                         }
                         ExitCode::Return => {
@@ -231,7 +239,10 @@ impl Vm {
                             log::info!("guest returned from upcall");
                             self.state = State::UpcallExec;
                         }
-                        _ => log::error!("Exit Code: {:?}", exit_code),
+                        _ => {
+                            log::error!("Exit Code: {:?}", exit_code);
+                            return Err(Error::UnhandledHalt(exit_code));
+                        }
                     }
                     self.react_to_exit_code(exit_code)?;
 
@@ -239,9 +250,7 @@ impl Vm {
                 }
                 VcpuExit::Debug(_debug) => {
                     let rip = self.vcpu.read_regs()?.rip;
-                    log::debug!("Debug called at RIP: {:#x}", rip);
                     self.print_debug_info()?;
-                    self.vcpu.enable_single_step().map_err(Error::Vcpu)?
                 }
                 // Unexpected Exit
                 reason => {
@@ -296,7 +305,7 @@ impl Vm {
     }
 
     fn hypercall_exec(&mut self) -> Result<()> {
-        log::debug!("HYPERCALL TRIGGER");
+        // log::debug!("HYPERCALL TRIGGER");
 
         // save the current state and set the hypercall state
         let prev = self.state;
@@ -306,7 +315,7 @@ impl Vm {
         let mut regs = self.vcpu.get_regs()?;
         let sig = regs.rbx;
         let transport = Transport::new(regs.r8, regs.r9);
-        log::debug!("Parameter: signature={}, transport={}", sig, transport);
+        // log::debug!("Parameter: signature={}, transport={}", sig, transport);
 
         // execute the hypercall
         let output = self
@@ -317,7 +326,7 @@ impl Vm {
         // write the result to the registers
         regs.r8 = output.primary();
         regs.r9 = output.secondary();
-        log::debug!("Result: transport={}", output);
+        // log::debug!("Result: transport={}", output);
         self.vcpu.set_regs(regs);
 
         // restore the previous state
@@ -540,16 +549,13 @@ impl Vm {
     /// print the basic debug information: registers and optionally the page fault region
     fn print_debug_info(&mut self) -> Result<()> {
         let (regs, sregs) = self.vcpu.read_all_regs()?;
-        log::debug!("RIP -> {:#x}", regs.rip);
         // Store the relevant register values to avoid holding the mutable borrow
-        let cr2 = sregs.cr2;
 
         // Print registers before getting memory to avoid borrow conflict
-        log::info!("registers -> {:?}", regs);
-        log::debug!("Paging Ptr -> {:?}", sregs.cr3);
+        // log::debug!("Register: {}", Self::print_kvm_regs(regs));
 
-        if cr2 != 0 {
-            log::info!("PAGE FAULT at: cr2 -> {:#x}", cr2);
+        if sregs.cr2 != 0 {
+            log::info!("PAGE FAULT at -> {:#x}", sregs.cr2);
             self.dump_paging()?;
         }
 
@@ -592,6 +598,30 @@ impl Vm {
         } else {
             Err(Error::VmMemoryMappingNotFound(paddr))
         }
+    }
+
+    fn print_kvm_regs(regs: &kvm_regs) -> String {
+        format!(
+            "rax=0x{:X} rbx=0x{:X} rcx=0x{:X} rdx=0x{:X} rsi=0x{:X} rdi=0x{:X} rsp=0x{:X} rbp=0x{:X} r8=0x{:X} r9=0x{:X} r10=0x{:X} r11=0x{:X} r12=0x{:X} r13=0x{:X} r14=0x{:X} r15=0x{:X} rip=0x{:X} rflags=0x{:X}",
+            regs.rax,
+            regs.rbx,
+            regs.rcx,
+            regs.rdx,
+            regs.rsi,
+            regs.rdi,
+            regs.rsp,
+            regs.rbp,
+            regs.r8,
+            regs.r9,
+            regs.r10,
+            regs.r11,
+            regs.r12,
+            regs.r13,
+            regs.r14,
+            regs.r15,
+            regs.rip,
+            regs.rflags,
+        )
     }
 }
 

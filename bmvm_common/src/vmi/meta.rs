@@ -32,11 +32,13 @@ pub enum Error {
     TooFewParameters { expected: usize, actual: usize },
 }
 
+#[cfg(feature = "vmi-consume")]
 pub fn read_u64(buf: &[u8]) -> Result<u64> {
     let buf: [u8; size_of::<u64>()] = buf[..size_of::<u64>()].try_into()?;
     Ok(u64::from_ne_bytes(buf))
 }
 
+#[cfg(feature = "vmi-consume")]
 fn read_cstring(input: &[u8]) -> Result<(CString, usize)> {
     let pos = memchr::memchr(0, input).ok_or_else(|| Error::MissingNullTermination)?;
     let str_buf = input[..pos + 1].to_vec();
