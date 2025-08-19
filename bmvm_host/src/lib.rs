@@ -38,7 +38,6 @@ pub(crate) const DEFAULT_SHARED_GUEST: usize = 8 * 1024 * 1024;
 pub(crate) const DEFAULT_SHARED_HOST: usize = 8 * 1024 * 1024;
 
 static ONCE_GUEST_SYSTEM_ADDR: OnceLock<PhysAddr> = OnceLock::new();
-static ONCE_GUEST_PAGING_ADDR: OnceLock<PhysAddr> = OnceLock::new();
 static ONCE_GUEST_STACK_ADDR: OnceLock<PhysAddr> = OnceLock::new();
 
 #[allow(non_snake_case)]

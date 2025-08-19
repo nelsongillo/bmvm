@@ -3,7 +3,7 @@ use crate::linker::config::Config;
 use crate::linker::hypercall::{CallableFunction, ConversionError};
 use crate::linker::{CallDirection, Func, hypercall, upcall};
 use bmvm_common::vmi::{FnCall, FnPtr, Signature};
-use rustc_hash::{FxBuildHasher, FxHashMap as HashMap, FxHashMap, FxHashSet as HashSet, FxHashSet};
+use rustc_hash::{FxBuildHasher, FxHashMap as HashMap, FxHashSet as HashSet};
 use std::ffi::{CStr, CString};
 use std::fmt::{Display, Formatter};
 

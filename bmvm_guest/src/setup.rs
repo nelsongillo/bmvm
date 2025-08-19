@@ -13,28 +13,26 @@ pub(super) fn setup() -> Result<(), ExitCode> {
         InterpretError::Misaligned(_, _) => ExitCode::InvalidMemoryLayoutTableMisaligned,
     })?;
 
-    let region_vmi_foreign = table
+    let foreign = table
         .into_iter()
         .find(|entry| {
             entry
                 .flags()
                 .contains(Flags::PRESENT | Flags::DATA_SHARED_FOREIGN)
         })
-        .ok_or(ExitCode::InvalidMemoryLayout)?;
+        .map(Arena::from);
 
-    let region_vmi_owned = table
+    let owning = table
         .into_iter()
         .find(|entry| {
             entry
                 .flags()
                 .contains(Flags::PRESENT | Flags::DATA_SHARED_OWNED)
         })
-        .ok_or(ExitCode::InvalidMemoryLayout)?;
+        .map(Arena::from);
 
     // set up the allocator for the VMI
-    let foreign = Arena::from(region_vmi_foreign);
-    let owned = Arena::from(region_vmi_owned);
-    mem::init(owned, foreign);
+    mem::init(owning, foreign);
 
     Ok(())
 }

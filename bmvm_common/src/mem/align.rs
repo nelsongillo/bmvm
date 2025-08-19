@@ -54,20 +54,17 @@ pub trait Align: Copy + Eq + PartialEq + PartialOrd + Ord {
 
     /// align an address to the beginning of the page
     fn align_floor(addr: u64) -> u64 {
-        x86_64::align_down(addr, Self::ALIGNMENT)
+        align_down(addr, Self::ALIGNMENT)
     }
 
     /// align an address to the beginning of the next page
     fn align_ceil(addr: u64) -> u64 {
-        x86_64::align_up(addr, Self::ALIGNMENT)
+        align_up(addr, Self::ALIGNMENT)
     }
 }
 
 #[cfg(target_arch = "x86_64")]
 pub type DefaultAlign = X86_64;
-
-#[cfg(not(target_arch = "x86_64"))]
-pub type DefaultAlign = Arm64;
 
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct X86_64;
@@ -109,12 +106,129 @@ impl Align for Stack {
     const ALIGNMENT: u64 = 16;
 }
 
+#[sealed::sealed]
+pub trait ZeroableInteger {}
+
+macro_rules! impl_zeroable_primitive {
+    ($($int:ty),* $(,)?) => {
+        $(
+        #[sealed::sealed]
+        impl ZeroableInteger for $int {}
+        )*
+    };
+}
+
+impl_zeroable_primitive! {
+    u8, u16, u32, u64, u128, usize,
+    i8, i16, i32, i64, i128, isize,
+}
+
+#[sealed::sealed]
+pub trait NonZeroableInteger {}
+
+macro_rules! impl_non_zeroable_primitive {
+    ($($int:ty),* $(,)?) => {
+        $(
+        #[sealed::sealed]
+        impl NonZeroableInteger for core::num::NonZero<$int> {}
+        )*
+    };
+}
+
+impl_non_zeroable_primitive! {
+    u8, u16, u32, u64, u128, usize,
+    i8, i16, i32, i64, i128, isize,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct Aligned<I: ZeroableInteger, A: Align = DefaultAlign> {
+    inner: I,
+    _alignment: PhantomData<A>,
+}
+
 /// Aligned non-zero integer wrapper
 #[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
-pub struct AlignedNonZero<I, A: Align = DefaultAlign> {
+pub struct AlignedNonZero<I: NonZeroableInteger, A: Align = DefaultAlign> {
     inner: I,
     _alignment: PhantomData<A>,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
+pub struct ErrZeroValue {}
+
+#[cfg(feature = "vmi-consume")]
+impl core::fmt::Display for ErrZeroValue {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "provided value is zero")
+    }
+}
+
+macro_rules! impl_aligned {
+    ($($int:ty => $aligned_name:ident),* $(,)?) => {
+        $(
+        #[allow(type_alias_bounds)]
+        /// Aligned non-zero type for $int
+        pub type $aligned_name<A: Align = DefaultAlign> = Aligned<$int, A>;
+
+        impl<A: Align> Aligned<$int, A> {
+            /// Creates a new aligned value with floor alignment
+            pub fn new_floor(value: $int) -> Self {
+                Self {
+                    inner: A::align_floor(value as u64) as $int,
+                    _alignment: PhantomData,
+                }
+            }
+
+            /// Creates a new aligned value with ceiling alignment
+            pub fn new_ceil(value: $int) -> Self {
+                Self {
+                    inner: A::align_ceil(value as u64) as $int,
+                    _alignment: PhantomData,
+                }
+            }
+
+            /// Creates from already aligned non-zero value
+            pub fn new_aligned(value: $int) -> Option<Self> {
+                if A::is_aligned(value as u64) {
+                    Some(Self {
+                        inner: value,
+                        _alignment: PhantomData,
+                    })
+                } else {
+                    None
+                }
+            }
+
+            #[inline]
+            pub const fn new_unchecked(value: $int) -> Self {
+                Self {
+                    inner: value,
+                    _alignment: PhantomData,
+                }
+            }
+
+            /// Returns the inner value
+            #[inline]
+            pub const fn get(&self) -> $int {
+                self.inner
+            }
+        }
+
+        impl<A: Align> From<Aligned<$int, A>> for $int {
+            fn from(value: Aligned<$int, A>) -> $int {
+                value.get()
+            }
+        }
+        )*
+    };
+}
+
+impl_aligned! {
+    u32 => AlignedU32,
+    u64 => AlignedU64,
+    usize => AlignedUsize,
 }
 
 /// Macro to implementation for selected NonZero integer types and creation of type aliases
@@ -156,6 +270,16 @@ macro_rules! impl_aligned_non_zero {
                 }
             }
 
+            /// Creates from already aligned non-zero value without checking alignment but still
+            /// zero checking
+            pub fn from_aligned(value: $int) -> Option<Self> {
+                <$nonzero>::new(value).map(|inner| Self {
+                    inner,
+                    _alignment: PhantomData,
+                })
+            }
+
+            #[inline]
             pub const fn new_unchecked(value: $nonzero) -> Self {
                 Self {
                     inner: value,
@@ -163,6 +287,7 @@ macro_rules! impl_aligned_non_zero {
                 }
             }
 
+            #[inline]
             pub const unsafe fn new_unchecked_raw(value: $int) -> Self {
                 Self {
                     inner: unsafe { <$nonzero>::new_unchecked(value) },
@@ -171,11 +296,13 @@ macro_rules! impl_aligned_non_zero {
             }
 
             /// Returns the inner value
+            #[inline]
             pub const fn get(&self) -> $int {
                 self.inner.get()
             }
 
             /// Returns the raw NonZero value
+            #[inline]
             pub const fn get_non_zero(self) -> $nonzero {
                 self.inner
             }
@@ -194,4 +321,33 @@ impl_aligned_non_zero! {
     u32 => NonZeroU32 => AlignedNonZeroU32,
     u64 => NonZeroU64 => AlignedNonZeroU64,
     usize => NonZeroUsize => AlignedNonZeroUsize,
+}
+
+macro_rules! impl_aligned_to_non_zero_aligned {
+    ($($zeroable:ident : $nonzero:ident => $aligned:ident),* $(,)?) => {
+        $(
+        impl<A: Align> TryFrom<$zeroable<A>> for $aligned<A> {
+            type Error = ErrZeroValue;
+
+            fn try_from(value: $zeroable<A>) -> core::result::Result<Self, Self::Error> {
+                $aligned::from_aligned(value.get()).ok_or(ErrZeroValue{})
+            }
+        }
+
+        impl<A: Align> From<$aligned<A>> for $zeroable<A> {
+            fn from(value: $aligned<A>) -> $zeroable<A> {
+                Self {
+                    inner: value.get(),
+                    _alignment: PhantomData,
+                }
+            }
+        }
+        )*
+    };
+}
+
+impl_aligned_to_non_zero_aligned! {
+    AlignedU32 : NonZeroU32 => AlignedNonZeroU32,
+    AlignedU64 : NonZeroU64 => AlignedNonZeroU64,
+    AlignedUsize : NonZeroUsize => AlignedNonZeroUsize,
 }

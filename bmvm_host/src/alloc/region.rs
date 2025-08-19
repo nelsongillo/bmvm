@@ -1,4 +1,3 @@
-use crate::alloc::Error::InvalidAddress;
 use crate::alloc::{Accessible, GuestOnly, Perm, ReadOnly, ReadWrite, WriteOnly};
 use bmvm_common::mem::{Align, AlignedNonZeroUsize, Arena, DefaultAlign, PhysAddr};
 use core::ffi::c_void;

@@ -7,7 +7,7 @@ use crate::guest::{ParamType, VAR_NAME_PARAM, gen_call_meta_debug, make_type_tur
 use bmvm_common::BMVM_META_SECTION_HOST;
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span, TokenStream as TS};
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::Error;
 use syn::spanned::Spanned;
 use syn::{ForeignItem, ItemForeignMod, parse_macro_input};

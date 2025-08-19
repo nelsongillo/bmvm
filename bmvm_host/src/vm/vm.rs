@@ -141,17 +141,29 @@ impl Vm {
 
         // allocate shared memory managed by the guest and host
         // Memory layout: sys | stack | shared_guest | shared_host | ... | code
-        let (shared_guest, shared_guest_entry) = self.alloc_shared_guest(stack_addr)?;
-        let (shared_host, shared_host_entry) = self.alloc_shared_host(shared_guest.addr())?;
+        let mut shared_host_addr_offset = stack_addr;
+        // Optionally allocate shared memory managed by the guest
+        let foreign = self
+            .alloc_shared_guest(stack_addr)?
+            .map(|(region, layout)| {
+                shared_host_addr_offset = region.addr();
+                let arena = region.as_arena();
+                self.mem_mappings.push(region);
+                exec.layout.push(layout);
+                arena
+            });
+        // Optionally allocate shared memory managed by the host
+        let owning = self
+            .alloc_shared_host(shared_host_addr_offset)?
+            .map(|(region, layout)| {
+                let arena = region.as_arena();
+                self.mem_mappings.push(region);
+                exec.layout.push(layout);
+                arena
+            });
+
         // initialize the respective allocators
-        let owned = shared_host.as_arena();
-        let foreign = shared_guest.as_arena();
-        init_vmi_alloc(owned, foreign);
-        // include in the execution bundle
-        self.mem_mappings.push(shared_guest);
-        self.mem_mappings.push(shared_host);
-        exec.layout.push(shared_guest_entry);
-        exec.layout.push(shared_host_entry);
+        init_vmi_alloc(owning, foreign);
 
         // prepare the system region
         let (gdt, idt, paging) = self.setup_long_mode_env(exec)?;
@@ -249,7 +261,6 @@ impl Vm {
                     return Ok(());
                 }
                 VcpuExit::Debug(_debug) => {
-                    let rip = self.vcpu.read_regs()?.rip;
                     self.print_debug_info()?;
                 }
                 // Unexpected Exit
@@ -378,9 +389,15 @@ impl Vm {
     fn alloc_shared_guest(
         &mut self,
         upper: PhysAddr,
-    ) -> Result<(Region<ReadWrite>, LayoutTableEntry)> {
+    ) -> Result<Option<(Region<ReadWrite>, LayoutTableEntry)>> {
+        if self.cfg.shared_guest.get() == 0 {
+            return Ok(None);
+        }
+
         let capacity = self.cfg.shared_guest;
-        let proto = self.manager.alloc_accessible::<ReadWrite>(capacity)?;
+        let proto = self
+            .manager
+            .alloc_accessible::<ReadWrite>(capacity.try_into().unwrap())?;
 
         // ensure same address alignment as the shared memory region
         let addr_base = Self::align_by_ref(
@@ -401,16 +418,23 @@ impl Vm {
             .set_len(size)
             .set_flags(Flags::PRESENT | Flags::DATA_SHARED_OWNED);
 
-        Ok((region, layout))
+        Ok(Some((region, layout)))
     }
 
     /// allocate shared memory managed by the host
     fn alloc_shared_host(
         &mut self,
         upper: PhysAddr,
-    ) -> Result<(Region<ReadWrite>, LayoutTableEntry)> {
+    ) -> Result<Option<(Region<ReadWrite>, LayoutTableEntry)>> {
+        if self.cfg.shared_host.get() == 0 {
+            return Ok(None);
+        }
+
         let capacity = self.cfg.shared_host;
-        let proto = self.manager.alloc_accessible::<ReadWrite>(capacity)?;
+        let proto = self
+            .manager
+            .alloc_accessible::<ReadWrite>(capacity.try_into().unwrap())
+            .map_err(|e| Error::Allocator(e))?;
 
         // ensure the same address alignment as the shared memory region
         let addr_base = Self::align_by_ref(
@@ -431,7 +455,7 @@ impl Vm {
             .set_len(size)
             .set_flags(Flags::PRESENT | Flags::DATA_SHARED_FOREIGN);
 
-        Ok((region, layout))
+        Ok(Some((region, layout)))
     }
 
     // TODO: Move to GuestOnly regions (if possible, wait for kernel upgrade)
@@ -552,7 +576,7 @@ impl Vm {
         // Store the relevant register values to avoid holding the mutable borrow
 
         // Print registers before getting memory to avoid borrow conflict
-        // log::debug!("Register: {}", Self::print_kvm_regs(regs));
+        log::debug!("Register: {}", Self::print_kvm_regs(regs));
 
         if sregs.cr2 != 0 {
             log::info!("PAGE FAULT at -> {:#x}", sregs.cr2);
@@ -585,7 +609,7 @@ impl Vm {
 
     /// dump the region containing the address to file
     fn dump_region_to_file(&self, addr: u64, name: String) -> Result<()> {
-        let paddr = PhysAddr::<DefaultAddrSpace>::from(unsafe { VirtAddr::new_unchecked(addr) });
+        let paddr = PhysAddr::<DefaultAddrSpace>::from(VirtAddr::new_unchecked(addr));
         if let Some(r) = self.mem_mappings.get(paddr) {
             match r.as_ref() {
                 Some(reference) => {

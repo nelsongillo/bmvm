@@ -152,7 +152,6 @@ dependencies = [
  "spin",
  "talc",
  "thiserror 2.0.15",
- "x86_64",
 ]
 
 [[package]]
@@ -199,7 +198,6 @@ dependencies = [
 name = "bmvm-macros"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "bmvm-common",
  "proc-macro-crate",
  "proc-macro2",
@@ -862,18 +860,18 @@ dependencies = [
 
 [[package]]
 name = "kvm-bindings"
-version = "0.13.0"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf3432d9f609fbede9f624d1dbefcce77985a9322de1d0e6d460ec05502b7fd0"
+checksum = "4b3c06ff73c7ce03e780887ec2389d62d2a2a9ddf471ab05c2ff69207cd3f3b4"
 dependencies = [
  "vmm-sys-util",
 ]
 
 [[package]]
 name = "kvm-ioctls"
-version = "0.23.0"
+version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e00243d27a20feb05cf001ae52ddc79831ac70c020f215ba1153ff9270b650a"
+checksum = "333f77a20344a448f3f70664918135fddeb804e938f28a99d685bd92926e0b19"
 dependencies = [
  "bitflags 2.9.2",
  "kvm-bindings",

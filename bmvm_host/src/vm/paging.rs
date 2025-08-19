@@ -1,7 +1,7 @@
 use crate::alloc::{Allocator, ReadWrite, Region};
 use bmvm_common::mem::{
     Align, AlignedNonZeroUsize, Flags, LayoutTableEntry, Page1GiB, Page2MiB, Page4KiB, PhysAddr,
-    VirtAddr, aligned_and_fits,
+    aligned_and_fits,
 };
 use rustc_hash::FxHashMap;
 use std::fmt::{Debug, Display};

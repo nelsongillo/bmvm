@@ -155,16 +155,20 @@ impl Into<Span> for Arena {
     }
 }
 
-pub fn init(owning: Arena, foreign: Arena) {
-    ALLOC_OWN.call_once(|| match AllocImpl::new(ErrOnOom, owning) {
-        Ok(alloc) => alloc,
-        Err(_) => panic!("Failed to initialize allocator"),
-    });
+pub fn init(owning: Option<Arena>, foreign: Option<Arena>) {
+    if let Some(owning) = owning {
+        ALLOC_OWN.call_once(|| match AllocImpl::new(ErrOnOom, owning) {
+            Ok(alloc) => alloc,
+            Err(_) => panic!("Failed to initialize allocator"),
+        });
+    }
 
-    ALLOC_FOREIGN.call_once(|| match AllocImpl::new(ErrOnOom, foreign) {
-        Ok(alloc) => alloc,
-        Err(_) => panic!("Failed to initialize allocator"),
-    });
+    if let Some(foreign) = foreign {
+        ALLOC_FOREIGN.call_once(|| match AllocImpl::new(ErrOnOom, foreign) {
+            Ok(alloc) => alloc,
+            Err(_) => panic!("Failed to initialize allocator"),
+        });
+    }
 }
 
 /// Allocate type T on the shared memory. This should only be used for data destined for the

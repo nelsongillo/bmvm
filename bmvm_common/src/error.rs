@@ -1,7 +1,5 @@
 use crate::mem::{RawOffsetPtr, VirtAddr};
 use crate::vmi::Signature;
-use x86_64::structures::paging::PageSize;
-use x86_64::structures::paging::mapper::MapToError;
 
 #[cfg_attr(
     feature = "vmi-consume",
@@ -119,16 +117,6 @@ impl ExitCode {
                 ExitCode::Unmapped(code)
             }
             _ => self,
-        }
-    }
-}
-
-impl<S: PageSize> From<MapToError<S>> for ExitCode {
-    fn from(value: MapToError<S>) -> Self {
-        match value {
-            MapToError::FrameAllocationFailed => ExitCode::FrameAllocationFailed,
-            MapToError::ParentEntryHugePage => ExitCode::ParentEntryHugePage,
-            MapToError::PageAlreadyMapped(_) => ExitCode::PageAlreadyMapped,
         }
     }
 }
