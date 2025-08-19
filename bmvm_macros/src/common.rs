@@ -354,14 +354,8 @@ pub fn gen_callmeta(
     // Get the CallMeta as bytes and prefix with the size (u16)
     let bytes = meta.to_bytes();
     let meta_size = bytes.len();
-    let (sig_seed_bytes, suffix) = bytes.split_at(8);
+    let suffix = &bytes[8..];
     let suffix_size = suffix.len();
-    let sig_seed = u64::from_ne_bytes(sig_seed_bytes[0..8].try_into().map_err(|e| {
-        Error::new(
-            Span::call_site(),
-            format!("Failed to convert bytes to u64: {}", e),
-        )
-    })?);
 
     // construct fully qualified name for SignatureHasher and TypeSignature for use in the macro output
     let crate_bmvm = find_crate(MOTHER_CRATE)?;

@@ -74,14 +74,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
-name = "bench-bmvm-guest-expose"
-version = "0.1.0"
-dependencies = [
- "bmvm-guest",
- "seq-macro",
-]
-
-[[package]]
 name = "bit_field"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -152,14 +144,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "bmvm-startup-setup-expose"
-version = "0.1.0"
-dependencies = [
- "bmvm-host",
- "seq-macro",
 ]
 
 [[package]]
@@ -587,12 +571,6 @@ dependencies = [
  "quote",
  "syn",
 ]
-
-[[package]]
-name = "seq-macro"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1bc711410fbe7399f390ca1c3b60ad0f53f80e95c5eb935e52268a0e2cd49acc"
 
 [[package]]
 name = "serde"

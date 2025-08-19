@@ -11,7 +11,4 @@ members = [
 
     "tooling/printlayout",
     "tooling/vmi-inspect",
-
-    "bench/setup-linking/bmvm_guest_expose",
-    "bench/setup-linking/bmvm_startup_setup_expose",
 ]
