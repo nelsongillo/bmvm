@@ -18,3 +18,5 @@ target
 
 # memory dump files
 **/dump_*.bin
+
+bench/binaries
