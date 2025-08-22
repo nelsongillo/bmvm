@@ -122,11 +122,6 @@ impl Vcpu {
         Ok(self.regs.get())
     }
 
-    pub fn read_sregs(&mut self) -> Result<&kvm_sregs> {
-        self.refresh_regs()?;
-        Ok(self.sregs.get())
-    }
-
     pub fn read_all_regs(&mut self) -> Result<(&kvm_regs, &kvm_sregs)> {
         self.refresh_regs()?;
         Ok((self.regs.get(), self.sregs.get()))

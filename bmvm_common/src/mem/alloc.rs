@@ -46,6 +46,7 @@ struct AllocImpl<M: lock_api::RawMutex, O: talc::OomHandler> {
 }
 
 impl<M: lock_api::RawMutex, O: talc::OomHandler> AllocImpl<M, O> {
+    #[allow(dead_code)]
     fn new(oom: O, arena: Arena) -> Result<Self, Error> {
         let mut talc = Talc::new(oom);
         let span = unsafe {
@@ -64,6 +65,7 @@ impl<M: lock_api::RawMutex, O: talc::OomHandler> AllocImpl<M, O> {
         })
     }
 
+    #[allow(dead_code)]
     fn new_shared(oom: O, arena: Arena) -> Result<Self, Error> {
         let (talc, span) = unsafe {
             Talc::new_with_shared_heap(oom, arena.into()).map_err(|_| Error::InitSharedFailed)?

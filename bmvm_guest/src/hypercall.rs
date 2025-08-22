@@ -4,28 +4,20 @@ use core::arch::asm;
 
 pub unsafe fn execute(sig: Signature, transport: Transport) -> Transport {
     unsafe {
-        let return_primary: u64;
-        let return_secondary: u64;
+        let mut primary: u64 = transport.primary();
+        let mut secondary: u64 = transport.secondary();
         asm!(
-        // prepare for hypercall execution
-        "mov rbx, {func}", // Move function signature to EBX
-        "mov r8, {ptr}", // Move primary to RCX
-        "mov r9, {cap}", // Move secondary ro RDX
-        // Trigger VM Exit -> Hypercall Execution
-        "out dx, al",
-        // Register Setup
-        in("dx") HYPERCALL_IO_PORT,
-        // data does not matter, as all we care about is the function signature and ptr offset
-        in("al") 0x00u8,
-        func = in(reg) sig,
-        ptr = in(reg) transport.primary(),
-        cap = in(reg) transport.secondary(),
-        // Post VM Exit
-        // Read return value offset ptr from EAX and construct OffsetPtr
-        lateout("r8") return_secondary,
-        lateout("r9") return_primary,
+            // prepare for hypercall execution
+            "mov rbx, {func}",          // Move function signature to EBX
+            "out dx, al",               // Trigger VM Exit -> Hypercall Execution (we do not cate about the data in al)
+            func = in(reg) sig,
+            in("dx") HYPERCALL_IO_PORT,
+            // Post VM Exit
+            // Read return value offset ptr from EAX and construct OffsetPtr
+            inlateout("r8") primary,
+            inlateout("r9") secondary,
         );
 
-        Transport::new(return_primary, return_secondary)
+        Transport::new(primary, secondary)
     }
 }

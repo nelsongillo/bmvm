@@ -21,7 +21,6 @@ use kvm_bindings::{KVM_API_VERSION, kvm_regs};
 use kvm_ioctls::{Cap, Kvm, VcpuExit, VmFd};
 use std::io::Write;
 use std::num::NonZeroUsize;
-use std::panic::PanicInfo;
 
 const INITIAL_PAGE_ALLOC: usize = 16;
 const ADDITIONAL_PAGE_ALLOC: usize = 4;
@@ -75,7 +74,6 @@ pub enum Error {
 enum State {
     PreSetup,
     Ready,
-    Executing,
     UpcallExec,
     HypercallExec,
     Shutdown,
@@ -330,7 +328,7 @@ impl Vm {
     }
 
     fn hypercall_exec(&mut self) -> Result<()> {
-        // log::debug!("HYPERCALL TRIGGER");
+        log::debug!("HYPERCALL TRIGGER");
 
         // save the current state and set the hypercall state
         let prev = self.state;
@@ -340,7 +338,7 @@ impl Vm {
         let mut regs = self.vcpu.get_regs()?;
         let sig = regs.rbx;
         let transport = Transport::new(regs.r8, regs.r9);
-        // log::debug!("Parameter: signature={}, transport={}", sig, transport);
+        log::debug!("Parameter: signature={}, transport={}", sig, transport);
 
         // execute the hypercall
         let output = self

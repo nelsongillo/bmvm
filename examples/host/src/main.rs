@@ -1,7 +1,4 @@
-use bmvm_host::{
-    ConfigBuilder, ForeignBuf, RuntimeBuilder, Shared, SharedBuf, TypeSignature, alloc, alloc_buf,
-    expose, linker,
-};
+use bmvm_host::{ConfigBuilder, ForeignBuf, RuntimeBuilder, expose, linker};
 use clap::Parser;
 
 const ENV_GUEST: &str = "GUEST";
@@ -17,30 +14,13 @@ struct Args {
     debug: bool,
 }
 
-#[repr(transparent)]
-#[derive(TypeSignature)]
-struct Foo(Bar);
-
-#[repr(C)]
-#[derive(TypeSignature)]
-struct Bar {
-    a: u32,
-    b: u32,
-}
+const FUNC_HYPERCALL_REDIRECT: &str = "hypercall_redirect";
 
 #[expose]
-extern "C" fn x(_a: Foo, _b: i32) -> Shared<Bar> {
-    let mut owned = unsafe { alloc::<Bar>().unwrap() };
-    let bar = owned.as_mut();
-    bar.a = 13;
-    bar.b = 12;
-
-    owned.into_shared()
+pub fn add(a: u64, b: u64) -> u64 {
+    let result = a + b;
+    result
 }
-
-const FUNC_FOO: &str = "foo";
-const FUNC_SUM: &str = "sum";
-type FooParams = (u32, Shared<Foo>);
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
@@ -55,9 +35,8 @@ fn main() -> anyhow::Result<()> {
 
     // configuration
     let cfg = ConfigBuilder::new().debug(args.debug);
-    let linker = linker::ConfigBuilder::new()
-        .register_guest_function::<FooParams, u32>(FUNC_FOO)
-        .register_guest_function::<(SharedBuf,), u64>(FUNC_SUM);
+    let linker =
+        linker::ConfigBuilder::new().register_guest_function::<(), u64>(FUNC_HYPERCALL_REDIRECT);
 
     let runtime = RuntimeBuilder::new()
         .linker(linker)
@@ -66,24 +45,9 @@ fn main() -> anyhow::Result<()> {
         .build()?;
     let mut module = runtime.setup()?;
 
-    let mut owned_foo = unsafe { alloc::<Foo>()? };
-    let foo = owned_foo.as_mut();
-    foo.0.a = 0xF0;
-    foo.0.b = 0xF00;
-    let shared_foo = owned_foo.into_shared();
-
-    let sum = module.call::<FooParams, u32>(FUNC_FOO, (0xF, shared_foo))?;
-    log::info!("Foo successfull: {sum:X}");
-
-    let mut sum_buf = unsafe { alloc_buf(0x100)? };
-    let mut buf = sum_buf.as_mut();
-    for i in 0..0x100 {
-        buf[i] = i as u8;
-    }
-
-    let expect = (0..0x100).fold(0, |acc, x| acc + x as u64);
-
-    let another = module.call::<(SharedBuf,), u64>(FUNC_SUM, (sum_buf.into_shared(),))?;
-    log::info!("Sum successfull: Got {another:X} expected {expect:X}");
+    let expect = 30;
+    let result = module.call::<(), u64>(FUNC_HYPERCALL_REDIRECT, ())?;
+    log::info!("DONE: {FUNC_HYPERCALL_REDIRECT}");
+    assert_eq!(result, expect);
     Ok(())
 }

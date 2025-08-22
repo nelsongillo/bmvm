@@ -100,6 +100,7 @@ impl Ord for UpcallFn {
 
 #[cfg(feature = "vmi-consume")]
 impl UpcallFn {
+    #[allow(dead_code)]
     pub fn try_from_bytes_consumed(buf: &[u8]) -> Result<(Self, usize)> {
         if buf.len() < size_of::<Self>() {
             return Err(Error::TooShort {
@@ -119,6 +120,7 @@ impl UpcallFn {
     }
 
     /// Try parsing a vector of `UpcallFn` from a byte buffer
+    #[allow(dead_code)]
     pub fn try_from_bytes_vec(buf: &[u8]) -> Result<Vec<Self>> {
         let mut offset = 0;
         let mut output = Vec::new();

@@ -10,7 +10,6 @@ use std::slice;
 
 const PAGE_FLAG_PRESENT: u64 = 1;
 const PAGE_FLAG_WRITE: u64 = 1 << 1;
-const PAGE_FLAG_USER: u64 = 1 << 2;
 const PAGE_FLAG_HUGE: u64 = 1 << 7;
 const PAGE_FLAG_NOT_EXECUTABLE: u64 = 1 << 63;
 
