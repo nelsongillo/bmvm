@@ -21,6 +21,7 @@ use kvm_bindings::{KVM_API_VERSION, kvm_regs};
 use kvm_ioctls::{Cap, Kvm, VcpuExit, VmFd};
 use std::io::Write;
 use std::num::NonZeroUsize;
+use std::panic::PanicInfo;
 
 const INITIAL_PAGE_ALLOC: usize = 16;
 const ADDITIONAL_PAGE_ALLOC: usize = 4;
@@ -210,7 +211,6 @@ impl Vm {
         R: ForeignShareable,
     {
         log::debug!("VM Execution");
-        self.state = State::Executing;
         loop {
             // Single Step through the guest in debug mode
             if self.cfg.debug {
@@ -251,6 +251,20 @@ impl Vm {
                             log::info!("guest returned from upcall");
                             self.state = State::UpcallExec;
                         }
+                        ExitCode::Panic(vaddr) => unsafe {
+                            log::error!("Panic occurred: {vaddr:X}");
+
+                            let _ = &self.print_debug_info()?;
+                            let _ = &self.dump_region(0x1000)?;
+                            let paddr = PhysAddr::from(vaddr);
+                            if let Some(r) = self.mem_mappings.get(paddr) {
+                                let offset = paddr.as_usize() - r.as_ptr() as usize;
+                                let ptr = r.as_ptr().add(offset).cast::<core::panic::PanicInfo>();
+                                let reference = &*ptr;
+                                log::error!("Panic at {}", reference);
+                            }
+                            return Err(Error::UnexpectedExit);
+                        },
                         _ => {
                             log::error!("Exit Code: {:?}", exit_code);
                             return Err(Error::UnhandledHalt(exit_code));
@@ -579,7 +593,7 @@ impl Vm {
         log::debug!("Register: {}", Self::print_kvm_regs(regs));
 
         if sregs.cr2 != 0 {
-            log::info!("PAGE FAULT at -> {:#x}", sregs.cr2);
+            log::error!("PAGE FAULT at -> {:#x}", sregs.cr2);
             self.dump_paging()?;
         }
 

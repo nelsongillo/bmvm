@@ -58,10 +58,10 @@ impl ForeignShareable for ForeignBuf {
         let raw_capacity = t.secondary as usize;
         let capacity = NonZeroUsize::new(raw_capacity).ok_or(ExitCode::ZeroCapacity)?;
 
-        Ok(ForeignBuf {
-            ptr: Foreign::<u8>::from_transport(t)?,
-            capacity,
-        })
+        let raw = RawOffsetPtr::from(t.primary as u32);
+        let ptr = OffsetPtr::from(raw);
+
+        Ok(ForeignBuf { ptr, capacity })
     }
 }
 

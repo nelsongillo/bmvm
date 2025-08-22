@@ -4,18 +4,9 @@ use core::arch::asm;
 use core::panic::PanicInfo;
 
 #[panic_handler]
-pub fn panic(_info: &PanicInfo) -> ! {
-    let rip: u64;
-
-    unsafe {
-        asm!(
-        "mov {}, [rbp + 8]",
-        out(reg) rip,
-        options(nostack, nomem)
-        );
-    }
-
-    panic_with_code(ExitCode::Panic(VirtAddr::new_unchecked(rip)));
+pub fn panic(info: &PanicInfo) -> ! {
+    let ptr = info as *const PanicInfo as u64;
+    panic_with_code(ExitCode::Panic(VirtAddr::new_unchecked(ptr)));
     loop {}
 }
 

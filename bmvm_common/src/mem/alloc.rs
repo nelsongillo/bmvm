@@ -29,6 +29,11 @@ pub enum Error {
     InitNotEnoughSpace,
     #[cfg_attr(
         feature = "vmi-consume",
+        error("Failed to initialize shared allocator")
+    )]
+    InitSharedFailed,
+    #[cfg_attr(
+        feature = "vmi-consume",
         error("Invalid offset pointer (out of bounds)")
     )]
     InvalidOffsetPtr,
@@ -46,6 +51,22 @@ impl<M: lock_api::RawMutex, O: talc::OomHandler> AllocImpl<M, O> {
         let span = unsafe {
             talc.claim(arena.into())
                 .map_err(|_| Error::InitNotEnoughSpace)?
+        };
+        let talck = talc.lock::<M>();
+
+        let (b, _) = span.get_base_acme().unwrap();
+        let base = VirtAddr::from_ptr(b);
+        let capacity = span.size();
+        Ok(Self {
+            talck,
+            base,
+            capacity,
+        })
+    }
+
+    fn new_shared(oom: O, arena: Arena) -> Result<Self, Error> {
+        let (talc, span) = unsafe {
+            Talc::new_with_shared_heap(oom, arena.into()).map_err(|_| Error::InitSharedFailed)?
         };
         let talck = talc.lock::<M>();
 
@@ -113,13 +134,13 @@ impl<M: lock_api::RawMutex, O: talc::OomHandler> AllocImpl<M, O> {
 
     fn get<T: TypeSignature>(&self, ptr: &OffsetPtr<T>) -> &T {
         let addr = self.base + ptr.offset as u64;
-        let value_ptr: *const T = addr.as_ptr::<T>().cast();
+        let value_ptr: *const T = addr.as_ptr::<T>();
         unsafe { value_ptr.as_ref().unwrap() }
     }
 
     fn get_ptr<T: Unpackable>(&self, ptr: &OffsetPtr<T>) -> *const T {
         let addr = self.base + ptr.offset as u64;
-        addr.as_ptr::<T>().cast()
+        addr.as_ptr::<T>()
     }
 
     /// Transform a Foreign<T> to a NonNull<T>
@@ -155,6 +176,7 @@ impl Into<Span> for Arena {
     }
 }
 
+#[cfg(feature = "vmi-consume")]
 pub fn init(owning: Option<Arena>, foreign: Option<Arena>) {
     if let Some(owning) = owning {
         ALLOC_OWN.call_once(|| match AllocImpl::new(ErrOnOom, owning) {
@@ -165,6 +187,23 @@ pub fn init(owning: Option<Arena>, foreign: Option<Arena>) {
 
     if let Some(foreign) = foreign {
         ALLOC_FOREIGN.call_once(|| match AllocImpl::new(ErrOnOom, foreign) {
+            Ok(alloc) => alloc,
+            Err(_) => panic!("Failed to initialize allocator"),
+        });
+    }
+}
+
+#[cfg(feature = "vmi-execute")]
+pub fn init(owning: Option<Arena>, foreign: Option<Arena>) {
+    if let Some(owning) = owning {
+        ALLOC_OWN.call_once(|| match AllocImpl::new_shared(ErrOnOom, owning) {
+            Ok(alloc) => alloc,
+            Err(_) => panic!("Failed to initialize allocator"),
+        });
+    }
+
+    if let Some(foreign) = foreign {
+        ALLOC_FOREIGN.call_once(|| match AllocImpl::new_shared(ErrOnOom, foreign) {
             Ok(alloc) => alloc,
             Err(_) => panic!("Failed to initialize allocator"),
         });
@@ -410,8 +449,7 @@ impl<T: TypeSignature> Foreign<T> {
 impl<T: Unpackable> Foreign<T> {
     pub fn get_ptr(&self) -> *const T {
         let alloc = ALLOC_FOREIGN.get().unwrap();
-        let ptr = alloc.get_ptr(&self.ptr);
-        ptr
+        alloc.get_ptr(&self.ptr)
     }
 
     pub unsafe fn unpack(self) -> T::Output {
@@ -449,15 +487,24 @@ impl<T: TypeSignature> Drop for Foreign<T> {
 
 /// Foreign buffer allocated by the VMI peer.
 pub struct ForeignBuf {
-    pub(crate) ptr: Foreign<u8>,
+    pub(crate) ptr: OffsetPtr<u8>,
     pub(crate) capacity: NonZeroUsize,
 }
 
 impl AsRef<[u8]> for ForeignBuf {
     fn as_ref(&self) -> &[u8] {
         let alloc = ALLOC_FOREIGN.get().unwrap();
-        let ptr = alloc.get_non_null(&self.ptr.ptr);
+        let ptr = alloc.get_non_null(&self.ptr);
         unsafe { core::slice::from_raw_parts(ptr.as_ptr(), self.capacity.get()) }
+    }
+}
+
+impl Drop for ForeignBuf {
+    fn drop(&mut self) {
+        // unwrap is safe because the allocator is needed to even construct the foreign pointer
+        let alloc = ALLOC_FOREIGN.get().unwrap();
+        let ptr = alloc.get_non_null(&self.ptr);
+        alloc.dealloc_buf(ptr, self.capacity);
     }
 }
 

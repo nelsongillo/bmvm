@@ -1,6 +1,6 @@
 use bmvm_common::error::ExitCode;
 use bmvm_common::interprete::{Interpret, InterpretError};
-use bmvm_common::mem::{Align, Arena, Flags, LayoutTable, Page4KiB};
+use bmvm_common::mem::{Align, Arena, DataAccessMode, LayoutTable, Page4KiB};
 use bmvm_common::{BMVM_MEM_LAYOUT_TABLE, mem};
 
 /// Parse the memory info structure and initialize the paging system etc.
@@ -18,7 +18,8 @@ pub(super) fn setup() -> Result<(), ExitCode> {
         .find(|entry| {
             entry
                 .flags()
-                .contains(Flags::PRESENT | Flags::DATA_SHARED_FOREIGN)
+                .data_access_mode()
+                .is_some_and(|m| m == DataAccessMode::SharedForeign)
         })
         .map(Arena::from);
 
@@ -27,7 +28,8 @@ pub(super) fn setup() -> Result<(), ExitCode> {
         .find(|entry| {
             entry
                 .flags()
-                .contains(Flags::PRESENT | Flags::DATA_SHARED_OWNED)
+                .data_access_mode()
+                .is_some_and(|m| m == DataAccessMode::SharedOwned)
         })
         .map(Arena::from);
 

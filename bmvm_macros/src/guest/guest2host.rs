@@ -172,7 +172,7 @@ fn gen_body(
 fn gen_transport(mother: &Ident, param: &ParamType) -> TS {
     let alloc_owned = quote! {#mother::alloc};
     let exit_with_code = quote! {#mother::exit_with_code};
-    let exit_code_alloc = quote! {#mother::ExitCode::AllocatorFailed};
+    let exit_code_alloc = quote! {#mother::ExitCode::AllocationFailed};
     let owned_shareable = quote! {#mother::OwnedShareable};
     let transport = Ident::new(VAR_NAME_TRANSPORT, Span::call_site());
     let params = Ident::new(VAR_NAME_PARAM, Span::call_site());

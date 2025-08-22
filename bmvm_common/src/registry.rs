@@ -42,7 +42,12 @@ impl<T: OwnedShareable> Params for (T,) {
 
 impl<T: OwnedShareable> TypeSignature for (T,) {
     // inherit signature from, as single value tuples should be treated as non-tuple values
-    const SIGNATURE: u64 = T::SIGNATURE;
+    const SIGNATURE: u64 = {
+        let mut hasher = SignatureHasher::new();
+        hasher.write(0u64.to_le_bytes().as_slice());
+        hasher.write(T::SIGNATURE.to_le_bytes().as_slice());
+        hasher.finish()
+    };
     // inherit primitive state from, as single value tuples should be treated as non-tuple values
     const IS_PRIMITIVE: bool = T::IS_PRIMITIVE;
     #[cfg(feature = "vmi-consume")]
