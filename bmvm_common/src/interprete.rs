@@ -69,7 +69,7 @@ pub trait Interpret: Sized {
 
 /// Check if the buffer is aligned to be properly interpreted as T
 fn is_aligned<T>(buf: &[u8]) -> Result<(), InterpretError> {
-    if ((buf.as_ptr() as usize) % align_of::<T>()) != 0 {
+    if !(buf.as_ptr() as usize).is_multiple_of(align_of::<T>()) {
         Err(InterpretError::Misaligned(
             align_of::<T>(),
             buf.as_ptr() as usize,

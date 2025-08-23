@@ -82,6 +82,10 @@ impl<M: lock_api::RawMutex, O: talc::OomHandler> AllocImpl<M, O> {
         })
     }
 
+    /// Allocate memory for a type in the owned shared memory.
+    /// # Safety
+    /// This is a wrapper or the `core::alloc::Allocator` trait. Reference their documentation
+    /// regarding further safety guarantees.
     unsafe fn alloc<T: TypeSignature>(&self) -> Result<Owned<T>, Error> {
         let layout = Layout::new::<T>();
         self.talck
@@ -172,9 +176,9 @@ impl Arena {
     }
 }
 
-impl Into<Span> for Arena {
-    fn into(self) -> Span {
-        Span::from_base_size(self.ptr.as_ptr(), self.capacity.get())
+impl From<Arena> for Span {
+    fn from(arena: Arena) -> Self {
+        Span::from_base_size(arena.ptr.as_ptr(), arena.capacity.get())
     }
 }
 
@@ -216,6 +220,8 @@ pub fn init(owning: Option<Arena>, foreign: Option<Arena>) {
 /// remote peer. The peer will free the allocated memory if the data is dropped. The original
 /// allocator can also drop it, but should only be done if one can ensure that the peer will not
 /// use the memory anymore.
+///
+/// # Safety
 pub unsafe fn alloc<T: TypeSignature>() -> Result<Owned<T>, Error> {
     unsafe {
         match ALLOC_OWN.get() {
@@ -241,18 +247,16 @@ pub unsafe fn alloc_buf(size: usize) -> Result<OwnedBuf, Error> {
 /// Deallocate a type allocated by `alloc`. Make sure to only call this if one can ensure that the
 /// peer will not use the memory anymore.
 pub fn dealloc<T: TypeSignature>(ptr: NonNull<T>) {
-    match ALLOC_OWN.get() {
-        Some(alloc) => alloc.dealloc(ptr),
-        None => return,
+    if let Some(alloc) = ALLOC_OWN.get() {
+        alloc.dealloc(ptr)
     }
 }
 
 /// Deallocate a buffer allocated by `alloc_buf`. Make sure to only call this if one can ensure that the
 /// peer will not use the memory anymore.
 pub fn dealloc_buf(buf: OwnedBuf) {
-    match ALLOC_OWN.get() {
-        Some(alloc) => alloc.dealloc_buf(buf.ptr, buf.capacity),
-        None => return,
+    if let Some(alloc) = ALLOC_OWN.get() {
+        alloc.dealloc_buf(buf.ptr, buf.capacity)
     }
 }
 

@@ -59,6 +59,7 @@ pub enum Error {
     IO(#[from] std::io::Error),
 }
 
+/// A buffer containing the ELF file.
 pub struct Buffer {
     inner: Vec<u8>,
 }
@@ -108,7 +109,7 @@ fn section_name_to_flags(name: &str) -> Result<Flags> {
 }
 
 impl ExecBundle {
-    pub(crate) fn from_buffer(buf: Buffer, manager: &Allocator) -> Result<Self> {
+    pub(crate) fn from_buffer(buf: &Buffer, manager: &Allocator) -> Result<Self> {
         let elf = Elf::parse(buf.as_ref())?;
 
         let entry =
@@ -144,12 +145,12 @@ impl ExecBundle {
         }
 
         let vmi_debug = Self::is_vmi_debug(&elf);
-        let host = Self::parse_vmi_vec(&elf, &buf.as_ref(), BMVM_META_SECTION_HOST, vmi_debug)?;
-        let expose = Self::parse_vmi_vec(&elf, &buf.as_ref(), BMVM_META_SECTION_EXPOSE, vmi_debug)?;
+        let host = Self::parse_vmi_vec(&elf, buf.as_ref(), BMVM_META_SECTION_HOST, vmi_debug)?;
+        let expose = Self::parse_vmi_vec(&elf, buf.as_ref(), BMVM_META_SECTION_EXPOSE, vmi_debug)?;
         let upcalls = if !expose.is_empty() {
             Self::parse_upcall_ptr(
                 &elf,
-                &buf.as_ref(),
+                buf.as_ref(),
                 BMVM_META_SECTION_EXPOSE_CALLS,
                 expose.len(),
             )?
@@ -182,10 +183,10 @@ impl ExecBundle {
                 continue;
             }
             // retrieve name from shstrtab and match
-            if let Some(sh_name) = elf.shdr_strtab.get_at(name_offset) {
-                if name.eq(sh_name) {
-                    return Some(idx);
-                }
+            if let Some(sh_name) = elf.shdr_strtab.get_at(name_offset)
+                && name.eq(sh_name)
+            {
+                return Some(idx);
             }
         }
 

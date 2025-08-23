@@ -33,7 +33,7 @@ impl<T: core::error::Error> Errors<T> {
         self.0.len()
     }
 
-    pub fn iter(&self) -> std::slice::Iter<T> {
+    pub fn iter(&self) -> std::slice::Iter<'_, T> {
         self.0.iter()
     }
 
@@ -206,7 +206,7 @@ impl Linker {
             .try_collect::<Vec<hypercall::Function>>()?;
 
         self.link_hypercall(&bundle.host)?;
-        self.link_upcall(&bundle)?;
+        self.link_upcall(bundle)?;
 
         Ok(())
     }
@@ -229,17 +229,17 @@ impl Linker {
     /// - `Err(Error::Joined)` if multiple errors occurred
     fn link_upcall(&mut self, bundle: &ExecBundle) -> Result<()> {
         let result = ValidationResults::new(&self.cfg.upcalls, &bundle.expose, |f| &f.base);
-        let _ = result.into_error((), CallDirection::HostToGuest, self.cfg.error_unused_guest)?;
+        result.into_error((), CallDirection::HostToGuest, self.cfg.error_unused_guest)?;
 
         // TODO: include in first pass
 
         let mut errs = Vec::new();
         let mut hashed_upcalls: HashMap<Signature, FnPtr> =
-            HashMap::with_capacity_and_hasher(bundle.upcalls.len(), FxBuildHasher::default());
+            HashMap::with_capacity_and_hasher(bundle.upcalls.len(), FxBuildHasher);
         hashed_upcalls.extend(bundle.upcalls.iter().map(|f| (f.sig, f.func)));
         for upcall in &mut self.cfg.upcalls {
             match hashed_upcalls.get(&upcall.base.sig) {
-                Some(ptr) => upcall.link(ptr.clone()),
+                Some(ptr) => upcall.link(*ptr),
                 None => errs.push(Error::MissingUpcallImpl {
                     func: upcall.base.clone(),
                 }),
@@ -288,14 +288,8 @@ impl<'a> ValidationResults<'a> {
     fn new<T>(host: &'a [T], guest: &'a [FnCall], extract: fn(&'a T) -> &'a Func) -> Self {
         // pre-alloc collections with estimated capacities
         let mut this = ValidationResults {
-            guest_sig_collisions: HashMap::with_capacity_and_hasher(
-                guest.len() / 2,
-                FxBuildHasher::default(),
-            ),
-            host_sig_collisions: HashMap::with_capacity_and_hasher(
-                host.len() / 2,
-                FxBuildHasher::default(),
-            ),
+            guest_sig_collisions: HashMap::with_capacity_and_hasher(guest.len() / 2, FxBuildHasher),
+            host_sig_collisions: HashMap::with_capacity_and_hasher(host.len() / 2, FxBuildHasher),
             unmatched_guest: Vec::with_capacity(guest.len().min(4)),
             sig_mismatches: Vec::with_capacity(guest.len().min(4)),
             unmatched_host: Vec::with_capacity(host.len().min(4)),
@@ -332,23 +326,23 @@ impl<'a> ValidationResults<'a> {
 
         // map potential guest collisions to errors
         if !&self.guest_sig_collisions.is_empty() {
-            let errs =
-                self.guest_sig_collisions
-                    .iter()
-                    .map(|(_, c)| Error::GuestSignatureCollision {
-                        funcs: GuestFnCollision::from(c.to_vec()),
-                    });
+            let errs = self
+                .guest_sig_collisions
+                .values()
+                .map(|c| Error::GuestSignatureCollision {
+                    funcs: GuestFnCollision::from(c.to_vec()),
+                });
             errors.extend(errs);
         }
 
         // map potential host collisions to errors
         if !&self.host_sig_collisions.is_empty() {
-            let errs =
-                self.host_sig_collisions
-                    .iter()
-                    .map(|(_, c)| Error::HostSignatureCollision {
-                        funcs: HostFnCollision::from(c.to_vec()),
-                    });
+            let errs = self
+                .host_sig_collisions
+                .values()
+                .map(|c| Error::HostSignatureCollision {
+                    funcs: HostFnCollision::from(c.to_vec()),
+                });
             errors.extend(errs);
         }
 
@@ -434,11 +428,9 @@ impl<'a> ValidationResults<'a> {
         HashMap<Signature, Vec<&'a Func>>,
     ) {
         let mut by_name =
-            HashMap::<&str, &Func>::with_capacity_and_hasher(host.len(), FxBuildHasher::default());
-        let mut by_sig = HashMap::<Signature, Vec<&Func>>::with_capacity_and_hasher(
-            host.len(),
-            FxBuildHasher::default(),
-        );
+            HashMap::<&str, &Func>::with_capacity_and_hasher(host.len(), FxBuildHasher);
+        let mut by_sig =
+            HashMap::<Signature, Vec<&Func>>::with_capacity_and_hasher(host.len(), FxBuildHasher);
 
         for f in host {
             let func = extract(f);
@@ -450,13 +442,11 @@ impl<'a> ValidationResults<'a> {
     }
 
     fn guest_map(guest: &[FnCall]) -> (HashMap<&CStr, &FnCall>, HashMap<Signature, Vec<&FnCall>>) {
-        let mut by_name = HashMap::<&CStr, &FnCall>::with_capacity_and_hasher(
-            guest.len(),
-            FxBuildHasher::default(),
-        );
+        let mut by_name =
+            HashMap::<&CStr, &FnCall>::with_capacity_and_hasher(guest.len(), FxBuildHasher);
         let mut by_sig = HashMap::<Signature, Vec<&FnCall>>::with_capacity_and_hasher(
             guest.len(),
-            FxBuildHasher::default(),
+            FxBuildHasher,
         );
 
         for call in guest {
@@ -484,7 +474,7 @@ impl<'a> ValidationResults<'a> {
     ) {
         // Track matched functions to find unmatched ones later
         let mut matched_functions =
-            HashSet::with_capacity_and_hasher(host_by_name.len(), FxBuildHasher::default());
+            HashSet::with_capacity_and_hasher(host_by_name.len(), FxBuildHasher);
 
         // Check guest calls against host functions
         for (n, &call) in guest_by_name {

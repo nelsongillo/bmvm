@@ -49,7 +49,7 @@ pub trait Align: Copy + Eq + PartialEq + PartialOrd + Ord {
     const ALIGNMENT: u64;
 
     fn is_aligned(addr: u64) -> bool {
-        addr % Self::ALIGNMENT == 0
+        addr.is_multiple_of(Self::ALIGNMENT)
     }
 
     /// align an address to the beginning of the page
@@ -287,6 +287,11 @@ macro_rules! impl_aligned_non_zero {
                 }
             }
 
+            /// Create from a raw value without any alignment checks
+            ///
+            /// # Safety
+            /// Passing a zero value or an unaligned value can cause undefined behaviour in
+            /// applications relying on those properties.
             #[inline]
             pub const unsafe fn new_unchecked_raw(value: $int) -> Self {
                 Self {

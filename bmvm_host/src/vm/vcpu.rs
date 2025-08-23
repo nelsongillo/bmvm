@@ -114,7 +114,7 @@ impl Vcpu {
 
     pub fn get_regs(&mut self) -> Result<kvm_regs> {
         self.refresh_regs()?;
-        Ok(self.regs.get().clone())
+        Ok(*self.regs.get())
     }
 
     pub fn read_regs(&mut self) -> Result<&kvm_regs> {
@@ -326,7 +326,7 @@ impl Vcpu {
     }
 
     /// Run the Vcpu by propagating any register changes made by the host to the guest and execute.
-    pub fn run(&mut self) -> Result<VcpuExit> {
+    pub fn run(&mut self) -> Result<VcpuExit<'_>> {
         self.propagate_regs()?;
         self.propagate_sregs()?;
 

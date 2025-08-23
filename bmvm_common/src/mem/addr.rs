@@ -1,5 +1,5 @@
-///! Disclaimer: The code for `PhysAddr` and `VirtAddr` are heavily inspired by the
-///! x86_64 crate (https://crates.io/crates/x86_64)
+//! Disclaimer: The code for `PhysAddr` and `VirtAddr` are heavily inspired by the
+//! x86_64 crate (https://crates.io/crates/x86_64)
 use crate::mem::Align;
 use crate::mem::bits::{AddrSpace, DefaultAddrSpace};
 use core::fmt;

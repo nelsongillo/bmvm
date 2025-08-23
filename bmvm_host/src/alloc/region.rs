@@ -29,7 +29,7 @@ pub enum Error {
     NixErrno(#[from] nix::errno::Errno),
 
     #[error("io error: {0}")]
-    IOError(#[from] std::io::Error),
+    IO(#[from] std::io::Error),
 
     #[error("invalid offset: {offset} (max: {max})")]
     InvalidOffset { offset: usize, max: usize },
@@ -109,17 +109,11 @@ impl RegionEntry {
     }
 
     pub fn readable(&self) -> bool {
-        match self {
-            RegionEntry::ReadOnly(_) | RegionEntry::ReadWrite(_) => true,
-            _ => false,
-        }
+        matches!(self, RegionEntry::ReadOnly(_) | RegionEntry::ReadWrite(_))
     }
 
     pub fn writeable(&self) -> bool {
-        match self {
-            RegionEntry::WriteOnly(_) | RegionEntry::ReadWrite(_) => true,
-            _ => false,
-        }
+        matches!(self, RegionEntry::WriteOnly(_) | RegionEntry::ReadWrite(_))
     }
 
     pub fn set_as_guest_memory(&mut self, vm: &VmFd, slot: u32) -> Result<()> {
@@ -580,27 +574,27 @@ impl_write_offset!(Region => WriteOnly, ReadWrite);
 impl_write_addr!(Region => WriteOnly, ReadWrite);
 impl_as_arena!(Region => WriteOnly, ReadWrite);
 
-impl Into<RegionEntry> for Region<ReadOnly> {
-    fn into(self) -> RegionEntry {
-        RegionEntry::ReadOnly(self)
+impl From<Region<ReadOnly>> for RegionEntry {
+    fn from(region: Region<ReadOnly>) -> Self {
+        RegionEntry::ReadOnly(region)
     }
 }
 
-impl Into<RegionEntry> for Region<WriteOnly> {
-    fn into(self) -> RegionEntry {
-        RegionEntry::WriteOnly(self)
+impl From<Region<WriteOnly>> for RegionEntry {
+    fn from(region: Region<WriteOnly>) -> Self {
+        RegionEntry::WriteOnly(region)
     }
 }
 
-impl Into<RegionEntry> for Region<ReadWrite> {
-    fn into(self) -> RegionEntry {
-        RegionEntry::ReadWrite(self)
+impl From<Region<ReadWrite>> for RegionEntry {
+    fn from(region: Region<ReadWrite>) -> Self {
+        RegionEntry::ReadWrite(region)
     }
 }
 
-impl Into<RegionEntry> for Region<GuestOnly> {
-    fn into(self) -> RegionEntry {
-        RegionEntry::GuestOnly(self)
+impl From<Region<GuestOnly>> for RegionEntry {
+    fn from(region: Region<GuestOnly>) -> Self {
+        RegionEntry::GuestOnly(region)
     }
 }
 

@@ -12,11 +12,6 @@ members = [
     # Debug Tooling
     "tooling/printlayout",
     "tooling/vmi-inspect",
-    # Benchmarking: Setup Noop Guest
-    "bench/setup-noop/bmvm_guest_noop",
-    "bench/setup-noop/bmvm_host_setup",
-    "bench/setup-noop/wasmtime_setup_noop",
-    # Benchmarking: Linking performance
-    "bench/setup-linking/bmvm_guest_expose",
-    "bench/setup-linking/bmvm_host_expose",
+    # Benchmark Guests
+    "bench/bmvm_guest_noop",
 ]

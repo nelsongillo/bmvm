@@ -112,7 +112,7 @@ impl ExitCode {
                 ExitCode::UnknownUpcall(sig)
             }
             ExitCode::Panic(_) => {
-                let addr: VirtAddr = VirtAddr::new(regs.rbx as u64);
+                let addr: VirtAddr = VirtAddr::new(regs.rbx);
                 ExitCode::Panic(addr)
             }
             ExitCode::Unmapped(_) => {
@@ -148,9 +148,9 @@ impl From<u8> for ExitCode {
     }
 }
 
-impl Into<u8> for ExitCode {
-    fn into(self) -> u8 {
-        match self {
+impl From<ExitCode> for u8 {
+    fn from(code: ExitCode) -> u8 {
+        match code {
             ExitCode::Normal => 0,
             ExitCode::Ready => 1,
             ExitCode::Return => 2,

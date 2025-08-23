@@ -7,12 +7,12 @@ edition = "2024"
 forced-target = "x86_64-unknown-none"
 
 [dependencies]
-bmvm-guest = {path="../../../bmvm_guest", features = ["setup"]}
+bmvm-guest = {path="../../bmvm_guest", features = ["setup"]}
 
 [profile.dev]
 panic = "abort"
 
 [profile.release]
 panic = "abort"
-
-
+lto = true
+opt-level = 3

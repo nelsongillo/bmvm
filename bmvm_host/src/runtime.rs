@@ -5,7 +5,7 @@ use crate::{
 use crate::{linker, vm};
 use bmvm_common::registry::Params;
 use bmvm_common::vmi::ForeignShareable;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -39,7 +39,7 @@ impl Module {
         self.vm
             .upcall_exec_setup::<P, R>(func, params)
             .map_err(Error::Upcall)?;
-        self.vm.run::<R>()?;
+        self.vm.run()?;
         self.vm.upcall_result::<R>().map_err(Error::Upcall)
     }
 }
@@ -51,16 +51,11 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    fn new<E>(vm: vm::Config, linker: linker::Config, executable: E) -> Result<Self>
-    where
-        E: AsRef<Path>,
-    {
-        let buffer = Buffer::new(executable)?;
-
+    fn new(vm: vm::Config, linker: linker::Config, buf: &Buffer) -> Result<Self> {
         let vm = vm::Vm::new(vm)?;
         let mut linker = linker::Linker::new(linker)?;
         // parse the guest executable
-        let executable = ExecBundle::from_buffer(buffer, vm.allocator())?;
+        let executable = ExecBundle::from_buffer(buf, vm.allocator())?;
 
         // execute linking stage
         linker.link(&executable)?;
@@ -79,46 +74,70 @@ impl Runtime {
         let (upcalls, hypercalls) = self.linker.into_calls();
 
         self.vm.link(hypercalls, upcalls);
-        self.vm.run::<()>().map_err(Error::Vm)?;
+        self.vm.run().map_err(Error::Vm)?;
         Ok(Module { vm: self.vm })
     }
 }
 
-pub struct RuntimeBuilder<P: AsRef<Path>> {
+pub struct RuntimeBuilder<'a> {
     vm: vm::Config,
     linker: linker::Config,
-    path: Option<P>,
+    path: Option<&'a Path>,
+    buffer: Option<&'a Buffer>,
 }
 
-impl<P: AsRef<Path>> RuntimeBuilder<P> {
+impl<'a> Default for RuntimeBuilder<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<'a> RuntimeBuilder<'a> {
     pub fn new() -> Self {
         Self {
             vm: vm::Config::default(),
             linker: linker::Config::default(),
             path: None,
+            buffer: None,
         }
     }
 
-    pub fn vm<C: Into<vm::Config>>(mut self, config: C) -> Self {
+    pub fn configure_vm<C: Into<vm::Config>>(mut self, config: C) -> Self {
         self.vm = config.into();
         self
     }
 
-    pub fn linker<C: Into<linker::Config>>(mut self, config: C) -> Self {
+    pub fn configure_linker<C: Into<linker::Config>>(mut self, config: C) -> Self {
         self.linker = config.into();
         self
     }
 
-    pub fn executable(mut self, path: P) -> Self {
+    /// Load the executable from a path.
+    /// Note: Any previously set buffer will be ignored.
+    pub fn with_path(mut self, path: &'a Path) -> Self {
         self.path = Some(path);
+        self.buffer = None;
+        self
+    }
+
+    /// Load the executable from a buffer.
+    /// Note: Any previously set path will be ignored.
+    pub fn with_buffer(mut self, buffer: &'a Buffer) -> Self {
+        self.buffer = Some(buffer);
+        self.path = None;
         self
     }
 
     pub fn build(self) -> Result<Runtime> {
-        if self.path.is_none() {
+        if self.path.is_none() && self.buffer.is_none() {
             return Err(Error::MissingExecutable);
         }
 
-        Runtime::new(self.vm, self.linker, self.path.unwrap())
+        if let Some(buf) = self.buffer {
+            Runtime::new(self.vm, self.linker, buf)
+        } else {
+            let buf = Buffer::new(self.path.unwrap())?;
+            Runtime::new(self.vm, self.linker, &buf)
+        }
     }
 }

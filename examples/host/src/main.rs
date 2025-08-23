@@ -1,5 +1,6 @@
-use bmvm_host::{ConfigBuilder, ForeignBuf, RuntimeBuilder, expose, linker};
+use bmvm_host::{ConfigBuilder, RuntimeBuilder, expose, linker};
 use clap::Parser;
+use std::path::{Path, PathBuf};
 
 const ENV_GUEST: &str = "GUEST";
 const ENV_DEBUG: &str = "DEBUG";
@@ -39,9 +40,9 @@ fn main() -> anyhow::Result<()> {
         linker::ConfigBuilder::new().register_guest_function::<(), u64>(FUNC_HYPERCALL_REDIRECT);
 
     let runtime = RuntimeBuilder::new()
-        .linker(linker)
-        .vm(cfg)
-        .executable(args.guest)
+        .configure_linker(linker)
+        .configure_vm(cfg)
+        .with_path(PathBuf::from(args.guest).as_path())
         .build()?;
     let mut module = runtime.setup()?;
 

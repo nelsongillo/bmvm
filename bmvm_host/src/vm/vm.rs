@@ -49,13 +49,13 @@ pub enum Error {
     #[error("Memory request exceeds max memory: {0}")]
     VmMemoryRequestExceedsMaxMemory(u64),
     #[error("Error during hypercall execution: {0}")]
-    HypercallError(registry::Error),
+    Hypercall(registry::Error),
     #[error("Error during upcall execution: {0}")]
-    UpcallInitError(registry::Error),
+    UpcallInit(registry::Error),
     #[error("Error during upcall preparation: {0}")]
-    UpcallExecError(mem::Error),
+    UpcallExec(mem::Error),
     #[error("Error during upcall return: {0}")]
-    UpcallReturnError(ExitCode),
+    UpcallReturn(ExitCode),
     #[error("Guest unexpectedly return with upcall state, without previous upcall call")]
     UnexpectedUpcallReturn,
     #[error("VCPU error: {0}")]
@@ -96,7 +96,7 @@ pub struct Vm {
 impl Vm {
     /// create a new VM instance
     pub(crate) fn new<CONFIG: Into<Config>>(cfg: CONFIG) -> Result<Self> {
-        let kvm = Kvm::new().map_err(|e| Error::Kvm(e))?;
+        let kvm = Kvm::new().map_err(Error::Kvm)?;
         let version = kvm.get_api_version();
         if version != KVM_API_VERSION as i32 {
             return Err(Error::KvmApiVersionMismatch(version));
@@ -108,7 +108,7 @@ impl Vm {
         }
 
         // create a kvm vm instance
-        let vm = kvm.create_vm_with_type(0).map_err(|e| Error::Vm(e))?;
+        let vm = kvm.create_vm_with_type(0).map_err(Error::Vm)?;
 
         // create a vcpu
         let vcpu = Vcpu::new(&vm, 0)?;
@@ -204,10 +204,7 @@ impl Vm {
 // Implementation regarding the vm execution state
 impl Vm {
     /// run the guest
-    pub(crate) fn run<R>(&mut self) -> Result<()>
-    where
-        R: ForeignShareable,
-    {
+    pub(crate) fn run(&mut self) -> Result<()> {
         log::debug!("VM Execution");
         loop {
             // Single Step through the guest in debug mode
@@ -298,9 +295,9 @@ impl Vm {
         let func = self
             .upcalls
             .find_upcall::<P, R>(name)
-            .map_err(Error::UpcallInitError)?;
+            .map_err(Error::UpcallInit)?;
 
-        let transport = params.into_transport().map_err(Error::UpcallExecError)?;
+        let transport = params.into_transport().map_err(Error::UpcallExec)?;
 
         self.vcpu.mutate_regs(|regs| {
             // Set the parameters
@@ -324,7 +321,7 @@ impl Vm {
     {
         let regs = self.vcpu.read_regs()?;
         let transport = Transport::new(regs.r8, regs.r9);
-        R::from_transport(transport).map_err(Error::UpcallReturnError)
+        R::from_transport(transport).map_err(Error::UpcallReturn)
     }
 
     fn hypercall_exec(&mut self) -> Result<()> {
@@ -344,7 +341,7 @@ impl Vm {
         let output = self
             .hypercalls
             .try_execute(sig, transport)
-            .map_err(Error::HypercallError)?;
+            .map_err(Error::Hypercall)?;
 
         // write the result to the registers
         regs.r8 = output.primary();
@@ -379,7 +376,7 @@ impl Vm {
         let region = self
             .manager
             .alloc_accessible::<ReadWrite>(capacity)
-            .map_err(|e| Error::Allocator(e))?;
+            .map_err(Error::Allocator)?;
 
         // stack grows downwards -> mount address is at the top of the stack
         let guest_addr = align_floor((base - capacity.get() as u64).as_u64());
@@ -446,7 +443,7 @@ impl Vm {
         let proto = self
             .manager
             .alloc_accessible::<ReadWrite>(capacity.try_into().unwrap())
-            .map_err(|e| Error::Allocator(e))?;
+            .map_err(Error::Allocator)?;
 
         // ensure the same address alignment as the shared memory region
         let addr_base = Self::align_by_ref(
@@ -523,7 +520,7 @@ impl Vm {
         // fill the layout table with the allocated regions
         let table = LayoutTable::from_mut_bytes(layout_region.as_mut()).unwrap();
         for (i, e) in exec.layout.iter().enumerate() {
-            table.entries[i] = e.clone();
+            table.entries[i] = *e;
         }
         self.mem_mappings.push(layout_region);
 
@@ -560,13 +557,13 @@ impl Vm {
                 addr: idt,
                 entries: 0,
             },
-            paging: paging,
+            paging,
             stack: (GUEST_STACK_ADDR().as_virt_addr() - 1).align_floor::<Stack>(),
             entry: entry_point,
             cpu_id: setup::cpuid(&self.kvm)?,
         };
 
-        self.vcpu.setup(&setup).map_err(|e| Error::Vcpu(e))
+        self.vcpu.setup(&setup).map_err(Error::Vcpu)
     }
 }
 

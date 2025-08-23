@@ -34,7 +34,7 @@ pub struct Func {
 
 impl PartialEq for Func {
     fn eq(&self, other: &Self) -> bool {
-        self.sig.eq(&(other.sig as u64))
+        self.sig.eq(&{ other.sig })
     }
 }
 

@@ -9,7 +9,7 @@ use proc_macro2::{Span, TokenStream as TS};
 use quote::quote;
 use syn::{Ident, ItemFn, parse_macro_input};
 
-static VAR_NAME_TRANSPORT: &'static str = "transport";
+static VAR_NAME_TRANSPORT: &str = "transport";
 
 /// Procedural macro implementation:
 /// * Checks that all function parameters implement TypeSignature and return type implements OwnedShareable trait

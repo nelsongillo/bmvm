@@ -11,22 +11,22 @@ use syn::{
 };
 
 #[cfg(feature = "guest")]
-pub const MOTHER_CRATE: &'static str = "bmvm-guest";
+pub const MOTHER_CRATE: &str = "bmvm-guest";
 
 #[cfg(feature = "host")]
-pub const MOTHER_CRATE: &'static str = "bmvm-host";
+pub const MOTHER_CRATE: &str = "bmvm-host";
 
 pub type StructFields = Vec<TokenStream>;
 pub type WherePreds = Vec<WherePredicate>;
 pub type ParamPackaging = Vec<TokenStream>;
 
-pub static VAR_NAME_PARAM: &'static str = "__params";
-pub static VAR_NAME_TRANSPORT: &'static str = "__transport";
-pub static VAR_NAME_RETURN: &'static str = "__ret";
+pub static VAR_NAME_PARAM: &str = "__params";
+pub static VAR_NAME_TRANSPORT: &str = "__transport";
+pub static VAR_NAME_RETURN: &str = "__ret";
 
-pub const STATIC_META: &'static str = "BMVM_CALL_META_";
-pub const STATIC_META_TUPLE: &'static str = "BMVM_CALL_META_TUPLE_";
-pub const STATIC_META_SIG: &'static str = "BMVM_CALL_META_SIG_";
+pub const STATIC_META: &str = "BMVM_CALL_META_";
+pub const STATIC_META_TUPLE: &str = "BMVM_CALL_META_TUPLE_";
+pub const STATIC_META_SIG: &str = "BMVM_CALL_META_SIG_";
 
 #[derive(Debug, Clone, Copy)]
 pub enum CallDirection {
@@ -51,11 +51,11 @@ pub enum ParamType {
 /// get_link_name returns name specified via a `link_name` attribute if available
 pub(crate) fn get_link_name(attrs: &[Attribute]) -> Option<Ident> {
     for attr in attrs {
-        if attr.path().is_ident("link_name") {
-            if let Meta::NameValue(link_name) = &attr.meta {
-                let link_name_str = link_name.to_token_stream().to_string();
-                return Some(Ident::new(link_name_str.as_str(), link_name.span()));
-            }
+        if attr.path().is_ident("link_name")
+            && let Meta::NameValue(link_name) = &attr.meta
+        {
+            let link_name_str = link_name.to_token_stream().to_string();
+            return Some(Ident::new(link_name_str.as_str(), link_name.span()));
         }
     }
     None
@@ -65,7 +65,7 @@ pub(crate) fn get_link_name(attrs: &[Attribute]) -> Option<Ident> {
 pub(crate) fn supported_type_string(ty: &Type) -> Result<String, Error> {
     match ty {
         Type::Tuple(tuple) => {
-            if tuple.elems.len() == 0 {
+            if tuple.elems.is_empty() {
                 Ok("()".to_string())
             } else {
                 Err(Error::new_spanned(ty.clone(), "tuples are not supported"))
@@ -121,10 +121,10 @@ pub(crate) fn suffix() -> String {
 /// The included `sig` is only a partially computed hash, as the struct field-related type hashes
 /// are not known during macro expansion and will be calculated later.
 pub(crate) fn create_fn_call(
-    attrs: &Vec<Attribute>,
+    attrs: &[Attribute],
     sig: &Signature,
 ) -> Result<(FnCall, Vec<Type>, Type), Error> {
-    let fn_name = get_link_name(&attrs).unwrap_or_else(|| sig.ident.clone());
+    let fn_name = get_link_name(attrs).unwrap_or_else(|| sig.ident.clone());
 
     // function arguments conversion
     let mut params_str = Vec::new();
@@ -132,7 +132,7 @@ pub(crate) fn create_fn_call(
     for arg in sig.inputs.iter() {
         if let syn::FnArg::Typed(pat_type) = arg {
             let ty = &pat_type.ty;
-            params_str.push(supported_type_string(&ty)?);
+            params_str.push(supported_type_string(ty)?);
             params.push(*ty.clone());
         }
     }
@@ -140,7 +140,7 @@ pub(crate) fn create_fn_call(
     // return type conversion
     let (rt, _rt_str) = match &sig.output {
         syn::ReturnType::Default => (parse_str::<Type>("()")?, None),
-        syn::ReturnType::Type(_, ty) => (*ty.clone(), Some(supported_type_string(&ty)?)),
+        syn::ReturnType::Type(_, ty) => (*ty.clone(), Some(supported_type_string(ty)?)),
     };
 
     // Initializing the function signature
@@ -233,7 +233,7 @@ pub(crate) fn make_type_turbofish(ty: &Type) -> TokenStream {
 pub fn process_params(
     mother: &Ident,
     transport_struct: &Ident,
-    params: &Vec<(Ident, Type)>,
+    params: &[(Ident, Type)],
     call_direction: Option<CallDirection>,
 ) -> Result<ParamType, Error> {
     // No parameters -> No transport struct needed
@@ -252,7 +252,7 @@ pub fn process_params(
 
     // Single parameter -> make sure it implements the ForeignShareable trait
     if params.len() == 1 {
-        let (name, ty) = &params.get(0).unwrap();
+        let (name, ty) = &params.first().unwrap();
         return Ok(ParamType::Value {
             ty_turbofish: make_type_turbofish(ty),
             name: name.clone(),
@@ -275,7 +275,7 @@ pub fn process_params(
 
     // Process each parameter
     for (name, ty) in params.iter() {
-        if let Some(_) = is_reference_type(ty) {
+        if is_reference_type(ty).is_some() {
             return Err(Error::new(
                 Span::call_site(),
                 "references are not supported.",
@@ -363,7 +363,7 @@ pub fn gen_callmeta(
     let ty_typesignature = quote! {#crate_bmvm::TypeSignature};
 
     // Convert each string to a syn::Type and quote the hashing line
-    let param_hash = if params.len() > 0 {
+    let param_hash = if !params.is_empty() {
         let var_hasher = format_ident!("hasher_params");
 
         let lines = params

@@ -16,8 +16,6 @@ const PAGE_FLAG_NOT_EXECUTABLE: u64 = 1 << 63;
 // 52-bit physical address mask (bits 51:12) in entries
 const ADDR_MASK: u64 = 0x000F_FFFF_FFFF_F000;
 
-/// ---------- Inputs ----------
-
 type Result<T> = core::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
@@ -25,7 +23,7 @@ pub enum Error {
     #[error("Empty Module")]
     EmptyModule,
     #[error("Error during region allocation: {0}")]
-    AllocError(#[from] crate::alloc::Error),
+    Alloc(#[from] crate::alloc::Error),
     #[error("Unknown region index {0}")]
     UnknownRegionIndex(usize),
     #[error("Expected region for address {0:x}, but got none")]
@@ -279,7 +277,7 @@ pub(super) fn setup(
 
     // Map the paging tables as well
     let mut arena_layout = arena.layout();
-    while arena_layout.len() > 0 {
+    while !arena_layout.is_empty() {
         setup_impl(&mut arena, entries, pml4)?;
         arena_layout = arena.layout();
     }
@@ -287,11 +285,7 @@ pub(super) fn setup(
     Ok(arena.into_regions())
 }
 
-fn setup_impl(
-    mut arena: &mut PagingArena,
-    entries: &[LayoutTableEntry],
-    pml4: PhysAddr,
-) -> Result<()> {
+fn setup_impl(arena: &mut PagingArena, entries: &[LayoutTableEntry], pml4: PhysAddr) -> Result<()> {
     for layout_entry in entries.iter() {
         let mut paddr = layout_entry.paddr();
         let mut vaddr = layout_entry.vaddr();
@@ -300,7 +294,7 @@ fn setup_impl(
         while vaddr < end {
             match () {
                 _ if aligned_and_fits::<Page1GiB>(vaddr.as_u64(), end.as_u64()) => {
-                    let pdpt = write_idx(&mut arena, paddr, pml4, vaddr.p4_index(), flags)?;
+                    let pdpt = write_idx(arena, paddr, pml4, vaddr.p4_index(), flags)?;
 
                     // Handle leaf entry
                     let table = arena.table_at(pdpt).ok_or(Error::NoRegionForAddr(pdpt))?;
@@ -310,8 +304,8 @@ fn setup_impl(
                     vaddr += Page1GiB::ALIGNMENT;
                 }
                 _ if aligned_and_fits::<Page2MiB>(vaddr.as_u64(), end.as_u64()) => {
-                    let pdpt = write_idx(&mut arena, paddr, pml4, vaddr.p4_index(), flags)?;
-                    let pd = write_idx(&mut arena, paddr, pdpt, vaddr.p3_index(), flags)?;
+                    let pdpt = write_idx(arena, paddr, pml4, vaddr.p4_index(), flags)?;
+                    let pd = write_idx(arena, paddr, pdpt, vaddr.p3_index(), flags)?;
 
                     // Handle leaf entry
                     let table = arena.table_at(pd).ok_or(Error::NoRegionForAddr(pd))?;
@@ -321,9 +315,9 @@ fn setup_impl(
                     vaddr += Page2MiB::ALIGNMENT;
                 }
                 _ => {
-                    let pdpt = write_idx(&mut arena, paddr, pml4, vaddr.p4_index(), flags)?;
-                    let pd = write_idx(&mut arena, paddr, pdpt, vaddr.p3_index(), flags)?;
-                    let pt = write_idx(&mut arena, paddr, pd, vaddr.p2_index(), flags)?;
+                    let pdpt = write_idx(arena, paddr, pml4, vaddr.p4_index(), flags)?;
+                    let pd = write_idx(arena, paddr, pdpt, vaddr.p3_index(), flags)?;
+                    let pt = write_idx(arena, paddr, pd, vaddr.p2_index(), flags)?;
 
                     // Handle leaf entry
                     let table = arena.table_at(pt).ok_or(Error::NoRegionForAddr(pt))?;

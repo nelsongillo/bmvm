@@ -40,7 +40,7 @@ pub fn read_u64(buf: &[u8]) -> Result<u64> {
 
 #[cfg(feature = "vmi-consume")]
 fn read_cstring(input: &[u8]) -> Result<(CString, usize)> {
-    let pos = memchr::memchr(0, input).ok_or_else(|| Error::MissingNullTermination)?;
+    let pos = memchr::memchr(0, input).ok_or(Error::MissingNullTermination)?;
     let str_buf = input[..pos + 1].to_vec();
     let str = CString::from_vec_with_nul(str_buf)?;
     Ok((str, pos + 1))
@@ -55,24 +55,36 @@ impl FnPtr {
         self.0.get()
     }
 
-    pub fn from_u64(u: u64) -> Result<Self> {
+    /// Interpret a raw address as a `FnPtr`.
+    ///
+    /// # Safety
+    /// This function is unsafe because it does not check that the address is a valid function
+    /// pointer.
+    pub unsafe fn from_u64_unchecked(u: u64) -> Self {
+        Self(unsafe { NonZeroU64::new_unchecked(u) })
+    }
+}
+
+impl From<NonZeroU64> for FnPtr {
+    fn from(n: NonZeroU64) -> Self {
+        Self(n)
+    }
+}
+
+impl TryFrom<u64> for FnPtr {
+    type Error = Error;
+    fn try_from(u: u64) -> Result<Self> {
         match NonZeroU64::new(u) {
             Some(n) => Ok(Self(n)),
             None => Err(Error::ZeroFuncPtr),
         }
-    }
-
-    pub unsafe fn from_u64_unchecked(u: u64) -> Self {
-        Self(unsafe { NonZeroU64::new_unchecked(u) })
     }
 }
 
 // SAFETY: On x84-64 extern "C" function pointer are represented as u64!
 impl From<Function> for FnPtr {
     fn from(f: Function) -> Self {
-        Self {
-            0: NonZeroU64::new(f as *const () as u64).unwrap(),
-        }
+        Self(NonZeroU64::new(f as *const () as u64).unwrap())
     }
 }
 
@@ -113,7 +125,7 @@ impl UpcallFn {
         let sig: Signature = read_u64(&buf[offset..])?;
         offset += size_of::<Signature>();
 
-        let func: FnPtr = FnPtr::from_u64(read_u64(&buf[offset..])?)?;
+        let func: FnPtr = FnPtr::try_from(read_u64(&buf[offset..])?)?;
         offset += size_of::<FnPtr>();
 
         Ok((Self { sig, func }, offset))
@@ -213,7 +225,7 @@ impl FnCall {
         if fn_name.as_ref().is_empty() {
             return Err(Error::EmptyFunctionName);
         }
-        let name = CString::new(fn_name.as_ref()).map_err(|e| Error::InvalidString(e))?;
+        let name = CString::new(fn_name.as_ref()).map_err(Error::InvalidString)?;
 
         if params.len() > u8::MAX as usize {
             return Err(Error::TooManyParameters {
@@ -228,12 +240,12 @@ impl FnCall {
                 return Err(Error::EmptyParameterType);
             }
 
-            let cparam = CString::new(param.as_ref()).map_err(|e| Error::InvalidString(e))?;
+            let cparam = CString::new(param.as_ref()).map_err(Error::InvalidString)?;
             debug_param_types.push(cparam);
         }
 
         let debug_return_type = if let Some(rt) = return_type {
-            Some(CString::new(rt.as_ref()).map_err(|e| Error::InvalidString(e))?)
+            Some(CString::new(rt.as_ref()).map_err(Error::InvalidString)?)
         } else {
             None
         };
@@ -286,8 +298,8 @@ impl FnCall {
     const MIN_SIZE: usize = {
         // signature u64
         size_of::<u64>()
-            // Fn Name: min len 1 + null terminator
-            + size_of::<u8>() + size_of::<u8>()
+                // Fn Name: min len 1 + null terminator
+                + size_of::<u8>() + size_of::<u8>()
     };
 
     const MIN_SIZE_DEBUG: usize = {

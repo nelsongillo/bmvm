@@ -17,11 +17,11 @@ pub fn host_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let foreign_mod = parse_macro_input!(item as ItemForeignMod);
 
     // Verify that this is an extern "C" block
-    if !foreign_mod
+    if foreign_mod
         .abi
         .name
         .as_ref()
-        .map_or(false, |abi| abi.value() == "C")
+        .is_none_or(|abi| abi.value() != "C")
     {
         return Error::new_spanned(
             foreign_mod.abi,
@@ -91,7 +91,7 @@ pub fn host_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
             let (fn_return, turbofish_return_type, union_return) = match &func.sig.output {
                 syn::ReturnType::Default => (quote! {()}, quote! {()}, true),
                 syn::ReturnType::Type(_, ty) => {
-                    (quote! {#ty}, make_type_turbofish(&*ty.clone()), false)
+                    (quote! {#ty}, make_type_turbofish(&ty.clone()), false)
                 }
             };
             let transport = gen_transport(&mother, &param_type);

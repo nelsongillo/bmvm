@@ -37,5 +37,4 @@ fn gen_call_meta_debug(fn_name: &Ident) -> TokenStream {
         #[unsafe(link_section = #BMVM_META_SECTION_DEBUG)]
         static #static_name: [u8; 0] = [];
     }
-    .into()
 }

@@ -1,8 +1,8 @@
 #![no_std]
 #![no_main]
 
+use bmvm_guest::expose;
 use bmvm_guest::host;
-use bmvm_guest::{SharedBuf, expose};
 
 #[host]
 unsafe extern "C" {

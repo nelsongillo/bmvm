@@ -15,11 +15,11 @@ pub enum Error {
     #[error("Guest tried to call an unliked upcall: {0}")]
     UnlikedUpcall(Signature),
     #[error("Hypercall threw an error: {0}")]
-    HypercallExecError(ExitCode),
+    HypercallExec(ExitCode),
     #[error("Unable to pass arguments to guest: {0}")]
-    UpcallParamError(mem::Error),
+    UpcallParam(mem::Error),
     #[error("Upcall execution threw an error: {0}")]
-    UpcallExecError(ExitCode),
+    UpcallExec(ExitCode),
 }
 
 pub(super) struct Hypercalls {
@@ -40,7 +40,7 @@ impl Hypercalls {
         };
 
         let func = self.inner[idx].call;
-        let output = func(transport).map_err(Error::HypercallExecError)?;
+        let output = func(transport).map_err(Error::HypercallExec)?;
         Ok(output)
     }
 }

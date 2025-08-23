@@ -53,6 +53,12 @@ impl SignatureHasher {
     }
 }
 
+impl Default for SignatureHasher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

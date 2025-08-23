@@ -107,15 +107,15 @@ pub fn derive_type_signature_impl(input: TokenStream) -> TokenStream {
 /// parse the repr attribute
 fn parse_repr(input: &DeriveInput) -> Repr {
     for attr in input.attrs.iter() {
-        if attr.path().is_ident("repr") {
-            if let Ok(args) = attr.parse_args_with(
+        if attr.path().is_ident("repr")
+            && let Ok(args) = attr.parse_args_with(
                 syn::punctuated::Punctuated::<syn::Ident, syn::Token![,]>::parse_terminated,
-            ) {
-                if args.iter().any(|arg| arg == "C") {
-                    return Repr::C;
-                } else if args.iter().any(|arg| arg == "transparent") {
-                    return Repr::Transparent;
-                }
+            )
+        {
+            if args.iter().any(|arg| arg == "C") {
+                return Repr::C;
+            } else if args.iter().any(|arg| arg == "transparent") {
+                return Repr::Transparent;
             }
         }
     }

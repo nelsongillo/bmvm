@@ -42,7 +42,7 @@ fn write_additional_values(code: &ExitCode) {
     unsafe {
         match code {
             ExitCode::UnknownUpcall(sig) => asm!("mov rbx, {}", in(reg) sig),
-            ExitCode::Unmapped(c) => asm!("mov bl, {}", in(reg_byte) c.clone()),
+            ExitCode::Unmapped(c) => asm!("mov bl, {}", in(reg_byte) *c),
             ExitCode::Panic(addr) => asm!("mov rbx, {}", in(reg) addr.as_u64()),
             _ => {}
         }

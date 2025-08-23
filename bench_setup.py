@@ -46,7 +46,7 @@ def build_project(name, project, output, target, feature=None, build_target=None
     if feature:
         build_cmd.extend(["--no-default-features", "--features", feature])
 
-    build_output = output / "log" / f"{name}-{build_target or "default"}-{feature or "default"}.log"
+    build_output = output / "log" / f"{name}.log"
 
     # Build
     try:
@@ -71,13 +71,13 @@ def build_project(name, project, output, target, feature=None, build_target=None
         print(f"No release binaries found in {target_dir}")
         return
 
-    # Move all binaries
-    dest_name = f"{name}-{build_target or "default"}-{feature or "default"}"
-    dest = output / dest_name
-    if dest.exists():
-        print(f"Warning: {dest} already exists, overwriting")
-    shutil.move(str(target_dir / name), str(dest))
-    print(f"Moved {dest_name} to {output}")
+    # copy the binary to the output directory
+    src = target_dir / name
+    dst = output / name
+    if dst.exists():
+        print(f"Warning: {dst} already exists, overwriting")
+    shutil.copy(str(src), str(dst))
+    print(f"Copied {name} to {output}")
 
 def main():
     import argparse
