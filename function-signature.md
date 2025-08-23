@@ -6,7 +6,7 @@ defines the signature based on the struct fields, or has a pre-defined signature
 ## TypeSignature
 The TypeSignature trait is implemented for following primitives:
 
-`u8`, `u16`, `u32`, `u64`, `u128`, `i8`, `i16`, `i32`, `i64`, `i128`, `f32`, `f64`, `bool`, `char`, `usize`
+`u8`, `u16`, `u32`, `u64`, `u128`, `i8`, `i16`, `i32`, `i64`, `i128`, `f32`, `f64`, `bool`, `usize`
 
 Following FFI related structs also implement TypeSignature:
 
@@ -23,7 +23,7 @@ included with addition of the index for the parameter. The last information incl
 function return type TypeSignature. All numbers are represented as u64 little endian byte representation.
 Example for the function foo:
 ```rust
-fn foo(a: u32, b: char) -> SharedBuf {}
+fn foo(a: u32, b: bool) -> SharedBuf {}
 ```
 the hash would compute as following
 ```rust
@@ -33,7 +33,7 @@ const SIGNATURE_FOO = {
     hasher.write(&(0u64).to_le_bytes());
     hasher.write(&<u32 as TypeSignature>::SIGNATURE.to_le_bytes());
     hasher.write(&(1u64).to_le_bytes());
-    hasher.write(&<char as TypeSignature>::SIGNATURE.to_le_bytes());
+    hasher.write(&<bool as TypeSignature>::SIGNATURE.to_le_bytes());
     hasher.write(&<SharedBuf as TypeSignature>::SIGNATURE.to_le_bytes());
     hasher.finish()
 };

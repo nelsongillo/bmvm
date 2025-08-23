@@ -131,7 +131,7 @@ macro_rules! impl_foreign_shareable_for_primitives {
 }
 
 impl_owned_shareable_for_primitives!(
-    u8, u16, u32, u64, u128, i8, i16, i32, i64, i128, f32, f64, usize, bool, char
+    u8, u16, u32, u64, u128, i8, i16, i32, i64, i128, f32, f64, usize, bool
 );
 impl_foreign_shareable_for_primitives!(
     u8, u16, u32, u64, u128, i8, i16, i32, i64, i128, f32, f64, usize
@@ -158,12 +158,5 @@ impl ForeignShareable for () {
 impl ForeignShareable for bool {
     fn from_transport(t: Transport) -> Result<Self, ExitCode> {
         Ok(t.primary != 0)
-    }
-}
-
-#[sealed::sealed]
-impl ForeignShareable for char {
-    fn from_transport(t: Transport) -> Result<Self, ExitCode> {
-        Ok(t.primary as u8 as char)
     }
 }

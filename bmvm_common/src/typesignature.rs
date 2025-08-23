@@ -55,7 +55,6 @@ impl_type_hash_for_primitive!(
     f32,
     f64,
     bool,
-    char,
     usize,
     (),
 );
