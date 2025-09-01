@@ -24,3 +24,6 @@ criterion = { version = "0.7.0", features = ["html_reports"] }
 [[bench]]
 name = "startup"
 harness = false
+
+[profile.release]
+debug = true

@@ -10,14 +10,13 @@ mod runtime;
 mod utils;
 mod vm;
 
-use bmvm_common::mem::{AddrSpace, Align, DefaultAddrSpace, Page4KiB, align_floor};
+use bmvm_common::mem::{AddrSpace, Align, DefaultAddrSpace, Page4KiB, PhysAddr, align_floor};
 use std::sync::OnceLock;
 
 // re-export bmvm-common
 pub use bmvm_common::TypeSignature;
 pub use bmvm_common::hash::SignatureHasher;
-pub use bmvm_common::mem::{Foreign, ForeignBuf, Owned, OwnedBuf, Shared, SharedBuf, Unpackable};
-pub use bmvm_common::mem::{PhysAddr, align_ceil, alloc, alloc_buf, get_foreign};
+pub use bmvm_common::mem;
 pub use bmvm_common::registry;
 pub use bmvm_common::vmi;
 pub use bmvm_common::vmi::{ForeignShareable, OwnedShareable, Signature, Transport};
@@ -33,10 +32,8 @@ pub use vm::{Config, ConfigBuilder};
 
 /// The default stack size for the guest (8MiB)
 pub(crate) const GUEST_DEFAULT_STACK_SIZE: usize = 8 * 1024 * 1024;
-/// The default shared memory size owned by the guest (8MiB)
-pub(crate) const DEFAULT_SHARED_GUEST: usize = 8 * 1024 * 1024;
-/// The default shared memory size owned by the host (8MiB)
-pub(crate) const DEFAULT_SHARED_HOST: usize = 8 * 1024 * 1024;
+/// The default shared memory size (8MiB)
+pub(crate) const DEFAULT_SHARED_MEMORY: usize = 8 * 1024 * 1024;
 
 static ONCE_GUEST_SYSTEM_ADDR: OnceLock<PhysAddr> = OnceLock::new();
 static ONCE_GUEST_STACK_ADDR: OnceLock<PhysAddr> = OnceLock::new();

@@ -8,8 +8,7 @@ use core::ptr::NonNull;
 use spin::once::Once;
 use talc::{ErrOnOom, Span, Talc};
 
-static ALLOC_FOREIGN: Once<AllocImpl<spin::Mutex<()>, ErrOnOom>> = Once::new();
-static ALLOC_OWN: Once<AllocImpl<spin::Mutex<()>, ErrOnOom>> = Once::new();
+static ALLOC: Once<AllocImpl<spin::Mutex<()>, ErrOnOom>> = Once::new();
 
 #[cfg_attr(
     feature = "vmi-consume",
@@ -183,16 +182,9 @@ impl From<Arena> for Span {
 }
 
 #[cfg(feature = "vmi-consume")]
-pub fn init(owning: Option<Arena>, foreign: Option<Arena>) {
-    if let Some(owning) = owning {
-        ALLOC_OWN.call_once(|| match AllocImpl::new(ErrOnOom, owning) {
-            Ok(alloc) => alloc,
-            Err(_) => panic!("Failed to initialize allocator"),
-        });
-    }
-
-    if let Some(foreign) = foreign {
-        ALLOC_FOREIGN.call_once(|| match AllocImpl::new(ErrOnOom, foreign) {
+pub fn init(arena: Option<Arena>) {
+    if let Some(arena) = arena {
+        ALLOC.call_once(|| match AllocImpl::new(ErrOnOom, arena) {
             Ok(alloc) => alloc,
             Err(_) => panic!("Failed to initialize allocator"),
         });
@@ -200,16 +192,9 @@ pub fn init(owning: Option<Arena>, foreign: Option<Arena>) {
 }
 
 #[cfg(feature = "vmi-execute")]
-pub fn init(owning: Option<Arena>, foreign: Option<Arena>) {
-    if let Some(owning) = owning {
-        ALLOC_OWN.call_once(|| match AllocImpl::new_shared(ErrOnOom, owning) {
-            Ok(alloc) => alloc,
-            Err(_) => panic!("Failed to initialize allocator"),
-        });
-    }
-
-    if let Some(foreign) = foreign {
-        ALLOC_FOREIGN.call_once(|| match AllocImpl::new_shared(ErrOnOom, foreign) {
+pub fn init(arena: Option<Arena>) {
+    if let Some(arena) = arena {
+        ALLOC.call_once(|| match AllocImpl::new_shared(ErrOnOom, arena) {
             Ok(alloc) => alloc,
             Err(_) => panic!("Failed to initialize allocator"),
         });
@@ -224,7 +209,7 @@ pub fn init(owning: Option<Arena>, foreign: Option<Arena>) {
 /// # Safety
 pub unsafe fn alloc<T: TypeSignature>() -> Result<Owned<T>, Error> {
     unsafe {
-        match ALLOC_OWN.get() {
+        match ALLOC.get() {
             Some(alloc) => alloc.alloc(),
             None => Err(Error::UninitializedAllocator),
         }
@@ -237,7 +222,7 @@ pub unsafe fn alloc<T: TypeSignature>() -> Result<Owned<T>, Error> {
 /// use the memory anymore.
 pub unsafe fn alloc_buf(size: usize) -> Result<OwnedBuf, Error> {
     unsafe {
-        match ALLOC_OWN.get() {
+        match ALLOC.get() {
             Some(alloc) => alloc.alloc_buf(size),
             None => Err(Error::UninitializedAllocator),
         }
@@ -247,7 +232,7 @@ pub unsafe fn alloc_buf(size: usize) -> Result<OwnedBuf, Error> {
 /// Deallocate a type allocated by `alloc`. Make sure to only call this if one can ensure that the
 /// peer will not use the memory anymore.
 pub fn dealloc<T: TypeSignature>(ptr: NonNull<T>) {
-    if let Some(alloc) = ALLOC_OWN.get() {
+    if let Some(alloc) = ALLOC.get() {
         alloc.dealloc(ptr)
     }
 }
@@ -255,13 +240,13 @@ pub fn dealloc<T: TypeSignature>(ptr: NonNull<T>) {
 /// Deallocate a buffer allocated by `alloc_buf`. Make sure to only call this if one can ensure that the
 /// peer will not use the memory anymore.
 pub fn dealloc_buf(buf: OwnedBuf) {
-    if let Some(alloc) = ALLOC_OWN.get() {
+    if let Some(alloc) = ALLOC.get() {
         alloc.dealloc_buf(buf.ptr, buf.capacity)
     }
 }
 
 pub unsafe fn get_foreign<T: TypeSignature>(ptr: OffsetPtr<T>) -> Result<Foreign<T>, Error> {
-    match ALLOC_FOREIGN.get() {
+    match ALLOC.get() {
         Some(alloc) => alloc.get_foreign(ptr),
         None => Err(Error::UninitializedAllocator),
     }
@@ -348,7 +333,7 @@ pub struct Owned<T: TypeSignature> {
 
 impl<T: TypeSignature> Owned<T> {
     pub fn into_shared(self) -> Shared<T> {
-        let alloc = ALLOC_OWN.get().unwrap();
+        let alloc = ALLOC.get().unwrap();
         Shared {
             inner: alloc.ptr_offset(self.inner),
         }
@@ -374,7 +359,7 @@ pub struct Shared<T: TypeSignature> {
 
 impl<T: TypeSignature> From<Owned<T>> for Shared<T> {
     fn from(owned: Owned<T>) -> Self {
-        let alloc = ALLOC_OWN.get().unwrap();
+        let alloc = ALLOC.get().unwrap();
         Shared {
             inner: alloc.ptr_offset(owned.inner),
         }
@@ -396,7 +381,7 @@ impl OwnedBuf {
     }
 
     pub fn into_shared(self) -> SharedBuf {
-        let alloc = ALLOC_OWN.get().unwrap();
+        let alloc = ALLOC.get().unwrap();
         let offset = alloc.ptr_offset(self.ptr);
 
         SharedBuf {
@@ -431,7 +416,7 @@ impl SharedBuf {
     /// to usage by the VMI peer!
     pub fn deallocate(self) {
         // unwrap is safe because the allocator is needed to even construct the foreign pointer
-        let alloc = ALLOC_OWN.get().unwrap();
+        let alloc = ALLOC.get().unwrap();
         let ptr = alloc.get_non_null(&self.ptr);
         alloc.dealloc_buf(ptr, self.capacity);
     }
@@ -447,14 +432,14 @@ pub struct Foreign<T: TypeSignature> {
 impl<T: TypeSignature> Foreign<T> {
     /// Get the underlying value of the pointer.
     pub fn get(&self) -> &T {
-        let alloc = ALLOC_FOREIGN.get().unwrap();
+        let alloc = ALLOC.get().unwrap();
         alloc.get(&self.ptr)
     }
 }
 
 impl<T: Unpackable> Foreign<T> {
     pub fn get_ptr(&self) -> *const T {
-        let alloc = ALLOC_FOREIGN.get().unwrap();
+        let alloc = ALLOC.get().unwrap();
         alloc.get_ptr(&self.ptr)
     }
 
@@ -476,7 +461,7 @@ impl<T: Unpackable> Foreign<T> {
     /// SAFETY: using the value after this function call triggers undefined behaviour.
     pub fn manually_dealloc(&self) {
         // unwrap is safe because the allocator is needed to even construct the foreign pointer
-        let alloc = ALLOC_FOREIGN.get().unwrap();
+        let alloc = ALLOC.get().unwrap();
         let ptr = alloc.get_non_null(&self.ptr);
         alloc.dealloc(ptr);
     }
@@ -485,7 +470,7 @@ impl<T: Unpackable> Foreign<T> {
 impl<T: TypeSignature> Drop for Foreign<T> {
     fn drop(&mut self) {
         // unwrap is safe because the allocator is needed to even construct the foreign pointer
-        let alloc = ALLOC_FOREIGN.get().unwrap();
+        let alloc = ALLOC.get().unwrap();
         let ptr = alloc.get_non_null(&self.ptr);
         alloc.dealloc(ptr);
     }
@@ -499,7 +484,7 @@ pub struct ForeignBuf {
 
 impl AsRef<[u8]> for ForeignBuf {
     fn as_ref(&self) -> &[u8] {
-        let alloc = ALLOC_FOREIGN.get().unwrap();
+        let alloc = ALLOC.get().unwrap();
         let ptr = alloc.get_non_null(&self.ptr);
         unsafe { core::slice::from_raw_parts(ptr.as_ptr(), self.capacity.get()) }
     }
@@ -508,7 +493,7 @@ impl AsRef<[u8]> for ForeignBuf {
 impl Drop for ForeignBuf {
     fn drop(&mut self) {
         // unwrap is safe because the allocator is needed to even construct the foreign pointer
-        let alloc = ALLOC_FOREIGN.get().unwrap();
+        let alloc = ALLOC.get().unwrap();
         let ptr = alloc.get_non_null(&self.ptr);
         alloc.dealloc_buf(ptr, self.capacity);
     }

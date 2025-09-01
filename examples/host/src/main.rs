@@ -1,6 +1,6 @@
-use bmvm_host::{ConfigBuilder, RuntimeBuilder, expose, linker};
+use bmvm_host::{ConfigBuilder, ModuleBuilder, expose, linker};
 use clap::Parser;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const ENV_GUEST: &str = "GUEST";
 const ENV_DEBUG: &str = "DEBUG";
@@ -39,16 +39,18 @@ fn main() -> anyhow::Result<()> {
     let linker =
         linker::ConfigBuilder::new().register_guest_function::<(), u64>(FUNC_HYPERCALL_REDIRECT);
 
-    let runtime = RuntimeBuilder::new()
+    let path = PathBuf::from(args.guest);
+
+    let runtime = ModuleBuilder::new()
         .configure_linker(linker)
         .configure_vm(cfg)
-        .with_path(PathBuf::from(args.guest).as_path())
+        .with_path(path.as_path())
         .build()?;
     let mut module = runtime.setup()?;
 
     let expect = 30;
     let result = module.call::<(), u64>(FUNC_HYPERCALL_REDIRECT, ())?;
-    log::info!("DONE: {FUNC_HYPERCALL_REDIRECT}");
+    // log::info!("DONE: {FUNC_HYPERCALL_REDIRECT}");
     assert_eq!(result, expect);
     Ok(())
 }

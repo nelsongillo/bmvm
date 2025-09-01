@@ -76,4 +76,19 @@ mod tests {
         hello_de.write("hallo".as_bytes());
         assert_eq!(210714492693, hello_de.finish());
     }
+
+    #[test]
+    fn differentiate_based_on_name() {
+        let mut a = SignatureHasher::new();
+        a.write("hello".as_bytes());
+        a.write(0u64.to_le_bytes().as_slice());
+        a.write(b"u64");
+
+        let mut b = SignatureHasher::new();
+        b.write("world".as_bytes());
+        b.write(0u64.to_le_bytes().as_slice());
+        b.write(b"u64");
+
+        assert_ne!(a.finish(), b.finish());
+    }
 }

@@ -5,7 +5,7 @@ use crate::{
 use crate::{linker, vm};
 use bmvm_common::registry::Params;
 use bmvm_common::vmi::ForeignShareable;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -24,11 +24,29 @@ pub enum Error {
 }
 
 /// A module is a loaded and initialized guest executable on which the host can call functions.
+#[derive(Debug)]
 pub struct Module {
     vm: vm::Vm,
 }
 
 impl Module {
+    fn new(vm: vm::Config, linker: linker::Config, buf: &Buffer) -> Result<Module> {
+        let mut vm = vm::Vm::new(vm)?;
+        let mut linker = linker::Linker::new(linker)?;
+        // parse the guest executable
+        let mut executable = ExecBundle::from_buffer(buf, vm.allocator())?;
+
+        // execute linking stage
+        linker.link(&executable)?;
+
+        vm.load_exec(&mut executable)?;
+        let (upcalls, hypercalls) = linker.into_calls();
+
+        vm.link(hypercalls, upcalls);
+        vm.run().map_err(Error::Vm)?;
+        Ok(Self { vm })
+    }
+
     /// Try calling a function on the guest with the provided parameters.
     /// Error if the function is not found or the signatures do not match.
     pub fn call<P, R>(&mut self, func: &'static str, params: P) -> Result<R>
@@ -44,55 +62,20 @@ impl Module {
     }
 }
 
-pub struct Runtime {
-    vm: vm::Vm,
-    linker: linker::Linker,
-    executable: ExecBundle,
-}
-
-impl Runtime {
-    fn new(vm: vm::Config, linker: linker::Config, buf: &Buffer) -> Result<Self> {
-        let vm = vm::Vm::new(vm)?;
-        let mut linker = linker::Linker::new(linker)?;
-        // parse the guest executable
-        let executable = ExecBundle::from_buffer(buf, vm.allocator())?;
-
-        // execute linking stage
-        linker.link(&executable)?;
-
-        Ok(Self {
-            vm,
-            linker,
-            executable,
-        })
-    }
-
-    /// Setup the module by loading the proxy OS and executing the module setup code.
-    /// Returns a initialized Module on which the host can call functions
-    pub fn setup(mut self) -> Result<Module> {
-        self.vm.load_exec(&mut self.executable)?;
-        let (upcalls, hypercalls) = self.linker.into_calls();
-
-        self.vm.link(hypercalls, upcalls);
-        self.vm.run().map_err(Error::Vm)?;
-        Ok(Module { vm: self.vm })
-    }
-}
-
-pub struct RuntimeBuilder<'a> {
+pub struct ModuleBuilder<'a> {
     vm: vm::Config,
     linker: linker::Config,
     path: Option<&'a Path>,
     buffer: Option<&'a Buffer>,
 }
 
-impl<'a> Default for RuntimeBuilder<'a> {
+impl<'a> Default for ModuleBuilder<'a> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<'a> RuntimeBuilder<'a> {
+impl<'a> ModuleBuilder<'a> {
     pub fn new() -> Self {
         Self {
             vm: vm::Config::default(),
@@ -128,16 +111,16 @@ impl<'a> RuntimeBuilder<'a> {
         self
     }
 
-    pub fn build(self) -> Result<Runtime> {
+    pub fn build(self) -> Result<Module> {
         if self.path.is_none() && self.buffer.is_none() {
             return Err(Error::MissingExecutable);
         }
 
         if let Some(buf) = self.buffer {
-            Runtime::new(self.vm, self.linker, buf)
+            Module::new(self.vm, self.linker, buf)
         } else {
             let buf = Buffer::new(self.path.unwrap())?;
-            Runtime::new(self.vm, self.linker, &buf)
+            Module::new(self.vm, self.linker, &buf)
         }
     }
 }

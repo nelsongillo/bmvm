@@ -1,9 +1,15 @@
-pub struct Dirty<T> {
+use std::fmt::Debug;
+
+#[derive(Debug)]
+pub struct Dirty<T>
+where
+    T: Debug,
+{
     inner: T,
     dirty: bool,
 }
 
-impl<T> Dirty<T> {
+impl<T: Debug> Dirty<T> {
     pub fn new(inner: T) -> Self {
         Self {
             inner,

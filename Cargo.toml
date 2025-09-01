@@ -9,6 +9,7 @@ members = [
     # Examples
     "examples/guest",
     "examples/host",
+    "examples/host-bench",
     # Debug Tooling
     "tooling/printlayout",
     "tooling/vmi-inspect",

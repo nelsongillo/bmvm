@@ -62,7 +62,7 @@ impl<'a> PagingArena<'a> {
         let capactity =
             AlignedNonZeroUsize::new_aligned(initial.get() * Page4KiB::ALIGNMENT as usize).unwrap();
         let base = allocator
-            .alloc_accessible::<ReadWrite>(capactity)?
+            .alloc::<ReadWrite>(capactity)?
             .set_guest_addr(pml4);
         let regions = vec![base];
         let mut pages = FxHashMap::default();
@@ -125,7 +125,7 @@ impl<'a> PagingArena<'a> {
                     .unwrap();
             let region = self
                 .allocator
-                .alloc_accessible::<ReadWrite>(on_demand)?
+                .alloc::<ReadWrite>(on_demand)?
                 .set_guest_addr(addr);
             self.regions.push(region);
             self.current = self.regions.len() - 1;

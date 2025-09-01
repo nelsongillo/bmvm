@@ -412,6 +412,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "host-bench"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bmvm-host",
+ "clap",
+ "env_logger",
+ "inventory",
+ "log",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

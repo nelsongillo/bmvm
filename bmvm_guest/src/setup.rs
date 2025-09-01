@@ -13,28 +13,18 @@ pub(super) fn setup() -> Result<(), ExitCode> {
         InterpretError::Misaligned(_, _) => ExitCode::InvalidMemoryLayoutTableMisaligned,
     })?;
 
-    let foreign = table
+    let shared = table
         .into_iter()
         .find(|entry| {
             entry
                 .flags()
                 .data_access_mode()
-                .is_some_and(|m| m == DataAccessMode::SharedForeign)
-        })
-        .map(Arena::from);
-
-    let owning = table
-        .into_iter()
-        .find(|entry| {
-            entry
-                .flags()
-                .data_access_mode()
-                .is_some_and(|m| m == DataAccessMode::SharedOwned)
+                .is_some_and(|m| m == DataAccessMode::Shared)
         })
         .map(Arena::from);
 
     // set up the allocator for the VMI
-    mem::init(owning, foreign);
+    mem::init(shared);
 
     Ok(())
 }

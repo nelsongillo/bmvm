@@ -75,6 +75,7 @@ pub struct Setup {
     pub cpu_id: CpuId,
 }
 
+#[derive(Debug)]
 pub struct Vcpu {
     inner: VcpuFd,
     regs: Dirty<kvm_regs>,

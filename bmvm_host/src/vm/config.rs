@@ -1,10 +1,10 @@
-use crate::{DEFAULT_SHARED_GUEST, DEFAULT_SHARED_HOST, GUEST_DEFAULT_STACK_SIZE};
+use crate::{DEFAULT_SHARED_MEMORY, GUEST_DEFAULT_STACK_SIZE};
 use bmvm_common::mem::{AlignedNonZeroUsize, AlignedUsize};
 
+#[derive(Debug)]
 pub struct Config {
     pub(crate) stack_size: AlignedNonZeroUsize,
-    pub(crate) shared_guest: AlignedUsize,
-    pub(crate) shared_host: AlignedUsize,
+    pub(crate) shared_memory: AlignedUsize,
     pub(crate) debug: bool,
 }
 
@@ -12,8 +12,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             stack_size: AlignedNonZeroUsize::new_ceil(GUEST_DEFAULT_STACK_SIZE).unwrap(),
-            shared_guest: AlignedUsize::new_ceil(DEFAULT_SHARED_GUEST),
-            shared_host: AlignedUsize::new_ceil(DEFAULT_SHARED_HOST),
+            shared_memory: AlignedUsize::new_ceil(DEFAULT_SHARED_MEMORY),
             debug: false,
         }
     }
@@ -41,13 +40,8 @@ impl ConfigBuilder {
         self
     }
 
-    pub fn shared_guest(mut self, size: AlignedUsize) -> Self {
-        self.config.shared_guest = size;
-        self
-    }
-
-    pub fn shared_host(mut self, size: AlignedUsize) -> Self {
-        self.config.shared_host = size;
+    pub fn shared_memory(mut self, size: AlignedUsize) -> Self {
+        self.config.shared_memory = size;
         self
     }
 

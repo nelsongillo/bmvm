@@ -382,7 +382,7 @@ impl<'a> ValidationResults<'a> {
                         errors.extend(errs);
                     } else {
                         self.unmatched_guest.iter().for_each(|f| {
-                            log::warn!("Guest function '{}' is not used by host.", f)
+                            // log::warn!("Guest function '{}' is not used by host.", f)
                         });
                     }
                 }
@@ -410,7 +410,7 @@ impl<'a> ValidationResults<'a> {
                         errors.extend(errs);
                     } else {
                         self.unmatched_host.iter().for_each(|f| {
-                            log::warn!("Host function '{}' is not used by guest.", f)
+                            // log::warn!("Host function '{}' is not used by guest.", f)
                         });
                     }
                 }

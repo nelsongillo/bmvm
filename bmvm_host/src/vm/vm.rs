@@ -79,6 +79,7 @@ enum State {
     Shutdown,
 }
 
+#[derive(Debug)]
 pub struct Vm {
     cfg: Config,
     state: State,
@@ -138,31 +139,17 @@ impl Vm {
         self.mem_mappings.push(stack);
         exec.layout.push(stack_entry);
 
-        // allocate shared memory managed by the guest and host
-        // Memory layout: sys | stack | shared_guest | shared_host | ... | code
-        let mut shared_host_addr_offset = stack_addr;
-        // Optionally allocate shared memory managed by the guest
-        let foreign = self
-            .alloc_shared_guest(stack_addr)?
-            .map(|(region, layout)| {
-                shared_host_addr_offset = region.addr();
-                let arena = region.as_arena();
-                self.mem_mappings.push(region);
-                exec.layout.push(layout);
-                arena
-            });
-        // Optionally allocate shared memory managed by the host
-        let owning = self
-            .alloc_shared_host(shared_host_addr_offset)?
-            .map(|(region, layout)| {
-                let arena = region.as_arena();
-                self.mem_mappings.push(region);
-                exec.layout.push(layout);
-                arena
-            });
+        // Memory layout: sys | stack | shared_shared | ... | code
+        // Optionally allocate shared memory managed
+        let shared = self.alloc_shared(stack_addr)?.map(|(region, layout)| {
+            let arena = region.as_arena();
+            self.mem_mappings.push(region);
+            exec.layout.push(layout);
+            arena
+        });
 
         // initialize the respective allocators
-        init_vmi_alloc(owning, foreign);
+        init_vmi_alloc(shared);
 
         // prepare the system region
         let (gdt, idt, paging) = self.setup_long_mode_env(exec)?;
@@ -231,11 +218,11 @@ impl Vm {
                     let exit_code = ExitCode::from((self.vcpu.read_regs()?.rax & 0xFF) as u8);
                     match exit_code {
                         ExitCode::Normal => {
-                            log::info!("normal exit, shutting down VM");
+                            log::info!("Guest triggered VM shutdown");
                             self.state = State::Shutdown;
                         }
                         ExitCode::Ready => {
-                            log::info!("Guest Setup done, ready to execute");
+                            // log::info!("Guest Setup done, ready to execute");
                             self.state = State::Ready;
                         }
                         ExitCode::Return => {
@@ -243,7 +230,7 @@ impl Vm {
                                 return Err(Error::UnexpectedUpcallReturn);
                             }
 
-                            log::info!("guest returned from upcall");
+                            log::info!("Guest returned from upcall");
                             self.state = State::UpcallExec;
                         }
                         ExitCode::Panic(vaddr) => unsafe {
@@ -306,7 +293,7 @@ impl Vm {
 
             // Set the function pointer
             regs.rip = func.ptr().unwrap().as_u64();
-            log::info!("Calling function '{name}' at {:#x}", regs.rip);
+            log::info!("Calling function '{name}'");
             true
         })?;
 
@@ -375,7 +362,7 @@ impl Vm {
     ) -> Result<(Region<ReadWrite>, LayoutTableEntry)> {
         let region = self
             .manager
-            .alloc_accessible::<ReadWrite>(capacity)
+            .alloc::<ReadWrite>(capacity)
             .map_err(Error::Allocator)?;
 
         // stack grows downwards -> mount address is at the top of the stack
@@ -394,19 +381,19 @@ impl Vm {
         Ok((stack, entry))
     }
 
-    /// allocate shared memory managed by the guest
-    fn alloc_shared_guest(
+    /// allocate shared memory managed
+    fn alloc_shared(
         &mut self,
         upper: PhysAddr,
     ) -> Result<Option<(Region<ReadWrite>, LayoutTableEntry)>> {
-        if self.cfg.shared_guest.get() == 0 {
+        if self.cfg.shared_memory.get() == 0 {
             return Ok(None);
         }
 
-        let capacity = self.cfg.shared_guest;
+        let capacity = self.cfg.shared_memory;
         let proto = self
             .manager
-            .alloc_accessible::<ReadWrite>(capacity.try_into().unwrap())?;
+            .alloc::<ReadWrite>(capacity.try_into().unwrap())?;
 
         // ensure same address alignment as the shared memory region
         let addr_base = Self::align_by_ref(
@@ -420,49 +407,12 @@ impl Vm {
 
         // construct the layout table entry
         let host_vaddr = region.as_ptr() as u64;
-        let size = (self.cfg.shared_guest.get() as u64 / DefaultAlign::ALIGNMENT) as u32;
+        let size = (self.cfg.shared_memory.get() as u64 / DefaultAlign::ALIGNMENT) as u32;
         let layout = LayoutTableEntry::empty()
             .set_paddr(addr)
             .set_vaddr(VirtAddr::new_truncate(host_vaddr))
             .set_len(size)
-            .set_flags(Flags::PRESENT | Flags::DATA_SHARED_OWNED);
-
-        Ok(Some((region, layout)))
-    }
-
-    /// allocate shared memory managed by the host
-    fn alloc_shared_host(
-        &mut self,
-        upper: PhysAddr,
-    ) -> Result<Option<(Region<ReadWrite>, LayoutTableEntry)>> {
-        if self.cfg.shared_host.get() == 0 {
-            return Ok(None);
-        }
-
-        let capacity = self.cfg.shared_host;
-        let proto = self
-            .manager
-            .alloc_accessible::<ReadWrite>(capacity.try_into().unwrap())
-            .map_err(Error::Allocator)?;
-
-        // ensure the same address alignment as the shared memory region
-        let addr_base = Self::align_by_ref(
-            upper.as_usize() as u64 - capacity.get() as u64,
-            proto.as_ptr() as u64,
-        );
-
-        // set the address of the region to the aligned address
-        let addr = PhysAddr::new(addr_base.get());
-        let region = proto.set_guest_addr(addr);
-
-        // construct the layout table entry
-        let host_vaddr = region.as_ptr() as u64;
-        let size = (self.cfg.shared_guest.get() as u64 / DefaultAlign::ALIGNMENT) as u32;
-        let layout = LayoutTableEntry::empty()
-            .set_paddr(addr)
-            .set_vaddr(VirtAddr::new_truncate(host_vaddr))
-            .set_len(size)
-            .set_flags(Flags::PRESENT | Flags::DATA_SHARED_FOREIGN);
+            .set_flags(Flags::PRESENT | Flags::DATA_SHARED);
 
         Ok(Some((region, layout)))
     }
@@ -478,7 +428,7 @@ impl Vm {
         let size_sys = AlignedNonZeroUsize::new_ceil((IDT_SIZE + GDT_SIZE) as usize).unwrap();
         let mut sys_region = self
             .manager
-            .alloc_accessible::<ReadWrite>(size_sys)?
+            .alloc::<ReadWrite>(size_sys)?
             .set_guest_addr(GUEST_SYSTEM_ADDR());
 
         // write GDT
@@ -498,7 +448,7 @@ impl Vm {
         let layout = AlignedNonZeroUsize::new_aligned(Page4KiB::ALIGNMENT as usize).unwrap();
         let mut layout_region = self
             .manager
-            .alloc_accessible::<ReadWrite>(layout)?
+            .alloc::<ReadWrite>(layout)?
             .set_guest_addr(BMVM_MEM_LAYOUT_TABLE);
         exec.layout.push(
             LayoutTableEntry::empty()

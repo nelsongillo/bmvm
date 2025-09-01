@@ -33,6 +33,8 @@ pub enum Error {
     },
     #[error("Unsupported machine: {0}")]
     UnsupportedPlatform(&'static str),
+    #[error("Missing PH_LOAD segments")]
+    MissingLoadSegments,
     #[error("unknown section at index {0}")]
     ElfUnnamedSection(usize),
     #[error("section {name} too large: got {size} but only supports up to {max}")]
@@ -60,6 +62,7 @@ pub enum Error {
 }
 
 /// A buffer containing the ELF file.
+#[derive(Debug, Clone)]
 pub struct Buffer {
     inner: Vec<u8>,
 }
@@ -108,7 +111,17 @@ fn section_name_to_flags(name: &str) -> Result<Flags> {
     }
 }
 
+const COUNT_LOAD_SEGMENTS: usize = 5;
+
+struct LoadSegment {
+    region_offset: u64,
+    file_offset: usize,
+    file_size: usize,
+}
+
 impl ExecBundle {
+    /// Create a new `ExecBundle` from the given ELF file.
+    /// The ELF file must be a valid ELF file and contain a valid entry point.
     pub(crate) fn from_buffer(buf: &Buffer, manager: &Allocator) -> Result<Self> {
         let elf = Elf::parse(buf.as_ref())?;
 
@@ -119,6 +132,10 @@ impl ExecBundle {
 
         // | code | data | heap | ...
         // iterate through all PH_LOAD header and build buffer
+        let mut starting_addr: PhysAddr = PhysAddr::new_truncate(u64::MAX);
+        let mut required_capacity: usize = 0;
+        let mut to_allocate: Vec<LoadSegment> = Vec::with_capacity(COUNT_LOAD_SEGMENTS);
+
         for (idx, ph) in elf.program_headers.iter().enumerate() {
             // Skip non PT_LOAD header
             if ph.p_type != elf::program_header::PT_LOAD {
@@ -130,19 +147,33 @@ impl ExecBundle {
             let p_end = align_ceil(ph.p_vaddr + ph.p_memsz);
             let to_alloc = p_end - p_start;
 
+            required_capacity += to_alloc as usize;
+            starting_addr = starting_addr.min(PhysAddr::new_truncate(p_start));
+
+            to_allocate.push(LoadSegment {
+                region_offset: ph.p_vaddr,
+                file_offset: ph.p_offset as usize,
+                file_size: ph.p_filesz as usize,
+            });
+
             // try creating a layout entry for this segment
             layout.push(Self::build_layout_table_entry(idx, ph, to_alloc, &elf)?);
-
-            // allocate + copy file content to region
-            let req_capacity = AlignedNonZeroUsize::new_ceil(to_alloc as usize).unwrap();
-            let mut proto_mem = manager.alloc_accessible::<ReadWrite>(req_capacity)?;
-            let to_cpy =
-                &buf.as_ref()[ph.p_offset as usize..(ph.p_offset as usize + ph.p_filesz as usize)];
-            let region_offset = ph.p_vaddr - p_start;
-            proto_mem.write_offset(region_offset as usize, to_cpy)?;
-            let mem = proto_mem.set_guest_addr(PhysAddr::new(p_start));
-            mem_regions.push(mem);
         }
+
+        // Error on quasi empty ELF file
+        if required_capacity == 0 {
+            return Err(Error::MissingLoadSegments);
+        }
+
+        // copy the ELF segments into the memory region
+        let capacity = AlignedNonZeroUsize::new_ceil(required_capacity).unwrap();
+        let proto = manager.alloc::<ReadWrite>(capacity)?;
+        let mut region = proto.set_guest_addr(starting_addr);
+        for segment in to_allocate {
+            let seg = &buf.as_ref()[segment.file_offset..segment.file_offset + segment.file_size];
+            region.write_addr(segment.region_offset, seg)?;
+        }
+        mem_regions.push(region);
 
         let vmi_debug = Self::is_vmi_debug(&elf);
         let host = Self::parse_vmi_vec(&elf, buf.as_ref(), BMVM_META_SECTION_HOST, vmi_debug)?;
@@ -207,7 +238,7 @@ impl ExecBundle {
                 &buf[section.sh_offset as usize..(section.sh_offset + section.sh_size) as usize];
 
             if content.is_empty() {
-                log::warn!("VMI section defined but empty: {}", section_name);
+                // log::warn!("VMI section defined but empty: {}", section_name);
                 return Ok(Vec::new());
             }
 

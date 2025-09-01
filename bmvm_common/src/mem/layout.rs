@@ -124,8 +124,7 @@ bitflags! {
         // Data-specific access flags (bits 4-5)
         const DATA_READ = 0b00 << 4;
         const DATA_WRITE = 0b01 << 4;
-        const DATA_SHARED_FOREIGN = 0b10 << 4;
-        const DATA_SHARED_OWNED = 0b11 << 4;
+        const DATA_SHARED = 0b11 << 4;
 
         // Mask for data access bits
         const DATA_ACCESS_MASK = 0b11 << 4;
@@ -187,9 +186,8 @@ impl Flags {
         match self.bits() >> 4 & 0b11 {
             0b00 => Some(DataAccessMode::Read),
             0b01 => Some(DataAccessMode::Write),
-            0b10 => Some(DataAccessMode::SharedForeign),
-            0b11 => Some(DataAccessMode::SharedOwned),
-            _ => unreachable!(), // We've masked to 2 bits, so only 0-3 possible
+            0b11 => Some(DataAccessMode::Shared),
+            _ => panic!("Invalid data access mode"),
         }
     }
 
@@ -204,8 +202,7 @@ impl Flags {
         self.data_access_mode().is_some_and(|m| match m {
             DataAccessMode::Read => false,
             DataAccessMode::Write => true,
-            DataAccessMode::SharedForeign => true,
-            DataAccessMode::SharedOwned => true,
+            DataAccessMode::Shared => true,
         })
     }
 
@@ -222,8 +219,7 @@ impl Flags {
         *self |= match mode {
             DataAccessMode::Read => Flags::DATA_READ,
             DataAccessMode::Write => Flags::DATA_WRITE,
-            DataAccessMode::SharedForeign => Flags::DATA_SHARED_FOREIGN,
-            DataAccessMode::SharedOwned => Flags::DATA_SHARED_OWNED,
+            DataAccessMode::Shared => Flags::DATA_SHARED,
         };
 
         Ok(())
@@ -235,8 +231,7 @@ impl Flags {
 pub enum DataAccessMode {
     Read,
     Write,
-    SharedForeign,
-    SharedOwned,
+    Shared,
 }
 
 #[cfg(feature = "vmi-consume")]
@@ -504,26 +499,23 @@ mod test {
 
     #[test]
     fn layout_table_entry_build() {
-        let mut entry = LayoutTableEntry::empty();
-        entry
+        let mut entry = LayoutTableEntry::empty()
             .set_len(0xabcde)
             .set_flags(Flags::CODE | Flags::PRESENT)
             .set_paddr(PhysAddr::new_unchecked(0x0000123456789000))
             .set_vaddr(VirtAddr::new_unchecked(0x0000123456789000)); // check for correct truncation
-        assert_eq!(0x123456789123456789abcde09, entry.0, "got {:x}", entry.0);
+        let want: u128 = 0x123456789123456789abcde09;
+        assert_eq!(want, entry.0, "wnat {:x} but got {:x}", want, entry.0);
     }
 
     #[test]
     fn flag_build() {
         assert_eq!(Flags::empty().bits(), 0);
+        assert_eq!((Flags::PRESENT | Flags::DATA_SHARED).bits(), 0b0011_0001);
+        assert!(!(Flags::PRESENT | Flags::DATA_SHARED).is_code());
         assert_eq!(
-            (Flags::PRESENT | Flags::DATA_SHARED_FOREIGN).bits(),
-            0b0010_0001
-        );
-        assert!(!(Flags::PRESENT | Flags::DATA_SHARED_FOREIGN).is_code());
-        assert_eq!(
-            (Flags::PRESENT | Flags::DATA_SHARED_FOREIGN).data_access_mode(),
-            Some(DataAccessMode::SharedForeign)
+            (Flags::PRESENT | Flags::DATA_SHARED).data_access_mode(),
+            Some(DataAccessMode::Shared)
         );
         assert_eq!(
             (Flags::PRESENT | Flags::DATA_READ).data_access_mode(),
@@ -586,18 +578,11 @@ mod test {
         flags.set_data_access_mode(DataAccessMode::Write).unwrap();
         assert_eq!(flags.data_access_mode(), Some(DataAccessMode::Write));
 
-        flags
-            .set_data_access_mode(DataAccessMode::SharedForeign)
-            .unwrap();
-        assert_eq!(
-            flags.data_access_mode(),
-            Some(DataAccessMode::SharedForeign)
-        );
+        flags.set_data_access_mode(DataAccessMode::Shared).unwrap();
+        assert_eq!(flags.data_access_mode(), Some(DataAccessMode::Shared));
 
-        flags
-            .set_data_access_mode(DataAccessMode::SharedOwned)
-            .unwrap();
-        assert_eq!(flags.data_access_mode(), Some(DataAccessMode::SharedOwned));
+        flags.set_data_access_mode(DataAccessMode::Shared).unwrap();
+        assert_eq!(flags.data_access_mode(), Some(DataAccessMode::Shared));
     }
 
     #[test]

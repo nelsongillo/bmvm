@@ -56,11 +56,6 @@ pub enum Error {
     RegionUnmappingFailed(PhysAddr, kvm_ioctls::Error),
 }
 
-enum StorageBackend {
-    Mmap(NonNull<u8>),
-    GuestMem(RawFd, NonNull<u8>),
-}
-
 pub struct RegionCollection {
     inner: Vec<(Range<usize>, RegionEntry)>,
 }
@@ -248,7 +243,7 @@ impl<'a> Iterator for RegionCollectionIterMut<'a> {
 /// can not be mapped into the host. To get a mappable region, set the guest address via `set_guest_addr`.
 pub struct ProtoRegion<P: Perm, A: Align = DefaultAlign> {
     capacity: AlignedNonZeroUsize,
-    storage: StorageBackend,
+    ptr: NonNull<u8>,
     _perm: PhantomData<P>,
     _align: PhantomData<A>,
 }
@@ -269,7 +264,7 @@ impl<P: Perm, A: Align> ProtoRegion<P, A> {
         Region {
             addr,
             capacity: self.capacity,
-            storage: self.storage,
+            ptr: self.ptr,
             slot: None,
             _perm: PhantomData,
             _align: PhantomData,
@@ -287,7 +282,7 @@ impl<P: Perm, A: Align> ProtoRegion<P, A> {
 pub struct Region<P: Perm, A: Align = DefaultAlign> {
     addr: PhysAddr,
     capacity: AlignedNonZeroUsize,
-    storage: StorageBackend,
+    ptr: NonNull<u8>,
     slot: Option<u32>,
     _perm: PhantomData<P>,
     _align: PhantomData<A>,
@@ -306,22 +301,13 @@ impl<P: Perm, A: Align> Region<P, A> {
 
     /// Set the region as a memory region
     pub fn set_as_guest_memory(&mut self, vm: &VmFd, slot: u32) -> Result<()> {
-        unsafe {
-            let result = match self.storage {
-                StorageBackend::Mmap(mem) => {
-                    set_as_guest_memory_mmap(vm, slot, self.capacity, self.addr, mem)
-                }
-                StorageBackend::GuestMem(fd, mem) => {
-                    set_as_guest_memory_memfd(vm, slot, self.capacity, self.addr, fd, mem)
-                }
-            };
+        let result = unsafe { set_as_guest_memory(vm, slot, self.capacity, self.addr, self.ptr) };
 
-            if result.is_ok() {
-                self.slot = Some(slot);
-            }
-
-            result
+        if result.is_ok() {
+            self.slot = Some(slot);
         }
+
+        result
     }
 
     pub fn remove_from_guest_memory(&mut self, vm: &VmFd) -> Result<()> {
@@ -330,18 +316,13 @@ impl<P: Perm, A: Align> Region<P, A> {
                 return Ok(());
             }
 
-            let result = match self.storage {
-                StorageBackend::Mmap(mem) => remove_from_guest_memory_mmap(
-                    vm,
-                    self.slot.unwrap(),
-                    self.capacity,
-                    self.addr,
-                    mem,
-                ),
-                StorageBackend::GuestMem(fd, mem) => {
-                    remove_from_guest_memory_memfd(vm, self.slot.unwrap(), self.addr, fd, mem)
-                }
-            };
+            let result = remove_from_guest_memory(
+                vm,
+                self.slot.unwrap(),
+                self.capacity,
+                self.addr,
+                self.ptr,
+            );
 
             if result.is_ok() {
                 self.slot = None;
@@ -354,16 +335,9 @@ impl<P: Perm, A: Align> Region<P, A> {
 
 impl<P: Perm, A: Align> Drop for Region<P, A> {
     fn drop(&mut self) {
-        match self.storage {
-            StorageBackend::GuestMem(fd, mem) => unsafe {
-                nix::sys::mman::munmap(mem.cast::<c_void>(), self.capacity.get())
-                    .expect("Failed to unmap memory");
-                nix::unistd::close(fd).expect("Failed to close guest memory file descriptor");
-            },
-            StorageBackend::Mmap(ptr) => unsafe {
-                nix::sys::mman::munmap(ptr.cast::<c_void>(), self.capacity.get())
-                    .expect("Failed to unmap memory");
-            },
+        unsafe {
+            nix::sys::mman::munmap(self.ptr.cast::<c_void>(), self.capacity.get())
+                .expect("Failed to unmap memory");
         }
     }
 }
@@ -375,14 +349,7 @@ macro_rules! impl_as_ref {
         $(
             impl<A: Align> AsRef<[u8]> for $target<$struct, A> {
                 fn as_ref(&self) -> &[u8] {
-                    match self.storage {
-                        StorageBackend::GuestMem(_, _) => {
-                            panic!("deref_mut on guest memory");
-                        },
-                        StorageBackend::Mmap(ptr) => {
-                            unsafe { slice::from_raw_parts(ptr.as_ptr(), self.capacity.get()) }
-                        }
-                    }
+                    unsafe { slice::from_raw_parts(self.ptr.as_ptr(), self.capacity.get()) }
                 }
             }
         )*
@@ -452,14 +419,7 @@ macro_rules! impl_as_mut {
         $(
             impl<A: Align> AsMut<[u8]> for $target<$struct, A> {
                 fn as_mut(&mut self) -> &mut [u8] {
-                    match self.storage {
-                        StorageBackend::GuestMem(_, _) => {
-                            panic!("deref_mut on guest memory");
-                        },
-                        StorageBackend::Mmap(mut ptr) => {
-                            unsafe { slice::from_raw_parts_mut(ptr.as_mut(), self.capacity.get()) }
-                        }
-                    }
+                    unsafe { slice::from_raw_parts_mut(self.ptr.as_mut(), self.capacity.get()) }
                 }
             }
         )*
@@ -500,11 +460,11 @@ macro_rules! impl_write_addr {
     ($target:ident => $($struct:ty),* $(,)?) => {
         $(
             impl<A: Align> $target<$struct, A> {
-                /// `write_abs` is like `write`, but tries to start writing based on the absolute address.
+                /// `write_addr` is like `write`, but tries to start writing based on the absolute address.
                 /// If the provided address is not included in the region address space, an Error will be returned.
-                fn write_addr(&mut self, addr: u64, buf: &[u8]) -> Result<usize> {
+                pub(crate) fn write_addr(&mut self, addr: u64, buf: &[u8]) -> Result<usize> {
                     let capacity = self.capacity.get();
-                    if self.addr.as_u64() < addr {
+                    if self.addr.as_u64() > addr {
                         return Err(Error::InvalidAddress{
                             addr,
                             start: self.addr,
@@ -534,12 +494,7 @@ macro_rules! impl_as_ptr {
             impl<A: Align> $target<$struct, A> {
                 /// As ptr returns a pointer to the underlying mmaped memory
                  pub fn as_ptr(&self) -> *const u8 {
-                    match self.storage {
-                        StorageBackend::GuestMem(_, _) => {
-                            panic!("tried to get ptr from guest memory");
-                        }
-                        StorageBackend::Mmap(ptr) => ptr.as_ptr(),
-                    }
+                    self.ptr.as_ptr()
                 }
             }
         )*
@@ -551,14 +506,7 @@ macro_rules! impl_as_arena {
         $(
             impl<A: Align> $target<$struct, A> {
                  pub fn as_arena(&self) -> Arena {
-                    match self.storage {
-                        StorageBackend::GuestMem(_, _) => {
-                            panic!("tried to get ptr from guest memory");
-                        }
-                        StorageBackend::Mmap(ptr) => {
-                            Arena::new(ptr, self.capacity)
-                        },
-                    }
+                     Arena::new(self.ptr, self.capacity)
                 }
             }
         )*
@@ -601,51 +549,21 @@ impl From<Region<GuestOnly>> for RegionEntry {
 impl_as_ptr!(ProtoRegion => ReadOnly, WriteOnly, ReadWrite);
 impl_as_ptr!(Region => ReadOnly, WriteOnly, ReadWrite);
 
+#[derive(Debug)]
 pub struct Allocator {
     m_flags: MapFlags,
-    use_guest_only_fallback: bool,
 }
 
 impl Allocator {
-    pub fn new(vm: &VmFd) -> Self {
+    pub fn new() -> Self {
         Self {
             m_flags: MMAP_FLAGS.iter().fold(MapFlags::empty(), |acc, x| acc | *x),
-            use_guest_only_fallback: !vm.check_extension(Cap::GuestMemfd),
         }
     }
 
-    pub fn alloc<P: Perm>(
-        &self,
-        capacity: AlignedNonZeroUsize,
-        vm: &VmFd,
-    ) -> Result<ProtoRegion<P, DefaultAlign>> {
-        self.allocate::<P>(capacity, vm)
-    }
-
-    pub fn alloc_accessible<P>(&self, capacity: AlignedNonZeroUsize) -> Result<ProtoRegion<P>>
+    pub fn alloc<P>(&self, capacity: AlignedNonZeroUsize) -> Result<ProtoRegion<P>>
     where
         P: Perm + Accessible,
-    {
-        self.mmap::<P>(capacity)
-    }
-
-    // FIXME: flags.contains(PROT_NONE) may not properly work
-    fn allocate<P: Perm>(
-        &self,
-        capacity: AlignedNonZeroUsize,
-        vm: &VmFd,
-    ) -> Result<ProtoRegion<P>> {
-        let flags = P::prot_flags();
-        if flags.contains(ProtFlags::PROT_NONE) {
-            self.guest_memfd(capacity, vm)
-        } else {
-            self.mmap(capacity)
-        }
-    }
-
-    fn mmap<P>(&self, capacity: AlignedNonZeroUsize) -> Result<ProtoRegion<P>>
-    where
-        P: Perm,
     {
         let flags = P::prot_flags();
         // mmap a region with the required size and flags
@@ -653,37 +571,9 @@ impl Allocator {
 
         let region = ProtoRegion {
             capacity,
-            storage: StorageBackend::Mmap(mem.cast::<u8>()),
+            ptr: mem.cast::<u8>(),
             _perm: std::marker::PhantomData,
             _align: std::marker::PhantomData,
-        };
-
-        // self.regions.add(region);
-
-        Ok(region)
-    }
-
-    fn guest_memfd<P: Perm>(
-        &self,
-        capacity: AlignedNonZeroUsize,
-        vm: &VmFd,
-    ) -> Result<ProtoRegion<P>> {
-        let gmem = kvm_create_guest_memfd {
-            size: capacity.get() as u64,
-            flags: 0,
-            reserved: [0; 6],
-        };
-
-        let fd = vm.create_guest_memfd(gmem)?;
-
-        let pflags = ProtFlags::PROT_READ | ProtFlags::PROT_WRITE;
-        let mem = unsafe { mmap_anonymous(None, capacity.get_non_zero(), pflags, self.m_flags)? };
-
-        let region = ProtoRegion {
-            capacity,
-            storage: StorageBackend::GuestMem(fd, mem.cast::<u8>()),
-            _perm: PhantomData,
-            _align: PhantomData,
         };
 
         Ok(region)
@@ -692,42 +582,11 @@ impl Allocator {
     /// wrap the P::prot_flags to include the guest only fallback flag
     /// if the Perm is not accessible
     fn perm_to_flags<P: Perm>(&self) -> ProtFlags {
-        let flags = P::prot_flags();
-        if self.use_guest_only_fallback && flags.contains(ProtFlags::PROT_NONE) {
-            return ProtFlags::PROT_READ | ProtFlags::PROT_WRITE;
-        }
-
-        flags
+        P::prot_flags()
     }
 }
 
-unsafe fn set_as_guest_memory_memfd(
-    vm: &VmFd,
-    slot: u32,
-    capacity: AlignedNonZeroUsize,
-    addr: PhysAddr,
-    fd: RawFd,
-    mem: NonNull<u8>,
-) -> Result<()> {
-    let mapping = kvm_userspace_memory_region2 {
-        slot,
-        flags: 0,
-        guest_phys_addr: addr.as_u64(),
-        memory_size: capacity.get() as u64,
-        userspace_addr: mem.as_ptr() as u64,
-        guest_memfd_offset: 0,
-        guest_memfd: fd as u32,
-        pad1: 0,
-        pad2: [0; 14],
-    };
-
-    unsafe {
-        vm.set_user_memory_region2(mapping)
-            .map_err(|e| Error::RegionMappingFailed(addr, e))
-    }
-}
-
-unsafe fn set_as_guest_memory_mmap(
+unsafe fn set_as_guest_memory(
     vm: &VmFd,
     slot: u32,
     capacity: AlignedNonZeroUsize,
@@ -748,32 +607,7 @@ unsafe fn set_as_guest_memory_mmap(
     }
 }
 
-unsafe fn remove_from_guest_memory_memfd(
-    vm: &VmFd,
-    slot: u32,
-    addr: PhysAddr,
-    fd: RawFd,
-    mem: NonNull<u8>,
-) -> Result<()> {
-    let mapping = kvm_userspace_memory_region2 {
-        slot,
-        flags: 0,
-        guest_phys_addr: addr.as_u64(),
-        memory_size: 0u64,
-        userspace_addr: mem.as_ptr() as u64,
-        guest_memfd_offset: 0,
-        guest_memfd: fd as u32,
-        pad1: 0,
-        pad2: [0; 14],
-    };
-
-    unsafe {
-        vm.set_user_memory_region2(mapping)
-            .map_err(|e| Error::RegionUnmappingFailed(addr, e))
-    }
-}
-
-unsafe fn remove_from_guest_memory_mmap(
+unsafe fn remove_from_guest_memory(
     vm: &VmFd,
     slot: u32,
     capacity: AlignedNonZeroUsize,
