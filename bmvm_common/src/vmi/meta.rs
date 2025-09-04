@@ -4,7 +4,7 @@ use core::cmp::Ordering;
 use std::ffi::{CStr, CString, FromVecWithNulError, NulError};
 use std::num::NonZeroU64;
 
-type Result<T> = std::result::Result<T, Error>;
+type Result<T> = core::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

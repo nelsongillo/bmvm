@@ -1,17 +1,14 @@
-use crate::alloc::{Accessible, GuestOnly, Perm, ReadOnly, ReadWrite, WriteOnly};
+use crate::alloc::{Accessible, Perm, ReadOnly, ReadWrite, WriteOnly};
 use bmvm_common::mem::{Align, AlignedNonZeroUsize, Arena, DefaultAlign, PhysAddr};
 use core::ffi::c_void;
-use kvm_bindings::{
-    kvm_create_guest_memfd, kvm_userspace_memory_region, kvm_userspace_memory_region2,
-};
-use kvm_ioctls::{Cap, VmFd};
+use kvm_bindings::kvm_userspace_memory_region;
+use kvm_ioctls::VmFd;
 use nix::sys::mman::{MapFlags, ProtFlags, mmap_anonymous};
 use std::cmp::min;
 use std::fs::File;
 use std::io::Write;
 use std::marker::PhantomData;
 use std::ops::Range;
-use std::os::fd::RawFd;
 use std::panic;
 use std::ptr::NonNull;
 use std::slice;
@@ -56,15 +53,16 @@ pub enum Error {
     RegionUnmappingFailed(PhysAddr, kvm_ioctls::Error),
 }
 
+#[derive(Debug)]
 pub struct RegionCollection {
     inner: Vec<(Range<usize>, RegionEntry)>,
 }
 
+#[derive(Debug)]
 pub enum RegionEntry {
     ReadOnly(Region<ReadOnly, DefaultAlign>),
     WriteOnly(Region<WriteOnly, DefaultAlign>),
     ReadWrite(Region<ReadWrite, DefaultAlign>),
-    GuestOnly(Region<GuestOnly, DefaultAlign>),
 }
 
 impl RegionEntry {
@@ -73,7 +71,6 @@ impl RegionEntry {
             RegionEntry::ReadOnly(r) => r.addr(),
             RegionEntry::WriteOnly(r) => r.addr(),
             RegionEntry::ReadWrite(r) => r.addr(),
-            RegionEntry::GuestOnly(r) => r.addr(),
         }
     }
 
@@ -82,7 +79,6 @@ impl RegionEntry {
             RegionEntry::ReadOnly(r) => r.as_ptr(),
             RegionEntry::WriteOnly(r) => r.as_ptr(),
             RegionEntry::ReadWrite(r) => r.as_ptr(),
-            _ => panic!("GuestOnly regions do not have a pointer"),
         }
     }
 
@@ -91,7 +87,6 @@ impl RegionEntry {
             RegionEntry::ReadOnly(r) => r.capacity,
             RegionEntry::WriteOnly(r) => r.capacity,
             RegionEntry::ReadWrite(r) => r.capacity,
-            RegionEntry::GuestOnly(r) => r.capacity,
         }
     }
 
@@ -116,7 +111,6 @@ impl RegionEntry {
             RegionEntry::ReadOnly(r) => r.set_as_guest_memory(vm, slot),
             RegionEntry::WriteOnly(r) => r.set_as_guest_memory(vm, slot),
             RegionEntry::ReadWrite(r) => r.set_as_guest_memory(vm, slot),
-            RegionEntry::GuestOnly(r) => r.set_as_guest_memory(vm, slot),
         }
     }
 
@@ -125,7 +119,6 @@ impl RegionEntry {
             RegionEntry::ReadOnly(r) => r.remove_from_guest_memory(vm),
             RegionEntry::WriteOnly(r) => r.remove_from_guest_memory(vm),
             RegionEntry::ReadWrite(r) => r.remove_from_guest_memory(vm),
-            RegionEntry::GuestOnly(r) => r.remove_from_guest_memory(vm),
         }
     }
 }
@@ -279,6 +272,7 @@ impl<P: Perm, A: Align> ProtoRegion<P, A> {
 
 /// This represents a memory region on host, which can be mapped into the physical memory
 /// of the guest.
+#[derive(Debug)]
 pub struct Region<P: Perm, A: Align = DefaultAlign> {
     addr: PhysAddr,
     capacity: AlignedNonZeroUsize,
@@ -341,8 +335,6 @@ impl<P: Perm, A: Align> Drop for Region<P, A> {
         }
     }
 }
-
-impl Region<GuestOnly> {}
 
 macro_rules! impl_as_ref {
     ($target:ident => $($struct:ty),* $(,)?) => {
@@ -537,12 +529,6 @@ impl From<Region<WriteOnly>> for RegionEntry {
 impl From<Region<ReadWrite>> for RegionEntry {
     fn from(region: Region<ReadWrite>) -> Self {
         RegionEntry::ReadWrite(region)
-    }
-}
-
-impl From<Region<GuestOnly>> for RegionEntry {
-    fn from(region: Region<GuestOnly>) -> Self {
-        RegionEntry::GuestOnly(region)
     }
 }
 

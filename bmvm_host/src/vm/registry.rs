@@ -22,6 +22,7 @@ pub enum Error {
     UpcallExec(ExitCode),
 }
 
+#[derive(Debug)]
 pub(super) struct Hypercalls {
     inner: Vec<hypercall::Function>,
 }
@@ -52,6 +53,7 @@ impl From<Vec<hypercall::Function>> for Hypercalls {
     }
 }
 
+#[derive(Debug)]
 pub(super) struct Upcalls {
     inner: Vec<upcall::Function>,
 }

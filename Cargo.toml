@@ -13,6 +13,7 @@ members = [
     # Debug Tooling
     "tooling/printlayout",
     "tooling/vmi-inspect",
+    "tooling/benchy",
     # Benchmark Guests
     "bench/bmvm_guest_noop",
 ]

@@ -1,7 +1,7 @@
 #[cfg(feature = "vmi-consume")]
-use core::fmt::{Debug, Display};
+use core::fmt::Formatter;
 #[cfg(feature = "vmi-consume")]
-use std::fmt::Formatter;
+use core::fmt::{Debug, Display};
 
 pub trait Zero {
     /// zero sets all values to their respective 0 value

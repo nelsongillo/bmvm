@@ -115,7 +115,7 @@ impl Vm {
         let vcpu = Vcpu::new(&vm, 0)?;
 
         // create a region manager
-        let manager = Allocator::new(&vm);
+        let manager = Allocator::new();
 
         Ok(Self {
             cfg: cfg.into(),
