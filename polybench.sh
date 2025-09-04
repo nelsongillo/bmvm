@@ -90,6 +90,6 @@ for file in "${FILES[@]}"; do
     if $dry; then
         echo "$benchy --warmup $warmup --iters $iters --runtime $runtime --file $file --output $output"
     else
-        $benchy --warmup "$warmup" --iters "$iters" --mode "$runtime" --file "$file --output $oputput"
+        $benchy --warmup "$warmup" --iters "$iters" --runtime "$runtime" --file "$file" --output "$output"
     fi
 done

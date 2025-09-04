@@ -55,7 +55,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut output = if let Some(output) = args.output {
         let o = PathBuf::from(output);
-        if !o.is_dir() {
+        if o.exists() && !o.is_dir() {
             return Err(anyhow::anyhow!(
                 "Provided output path is not a directory: {}",
                 o.display()
