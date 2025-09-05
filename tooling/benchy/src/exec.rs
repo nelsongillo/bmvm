@@ -1,5 +1,5 @@
 use bmvm_host::mem::AlignedUsize;
-use bmvm_host::{ConfigBuilder, Module as BmvmModule, ModuleBuilder, linker};
+use bmvm_host::{ConfigBuilder, Module as BmvmModule, ModuleBuilder, Upcall, linker};
 use indicatif::ProgressBar;
 use std::path::PathBuf;
 use std::process::Output;
@@ -51,21 +51,23 @@ pub fn wasm(path: &PathBuf, warmup: usize, iters: usize) -> anyhow::Result<Vec<f
 }
 
 pub fn bmvm(path: &PathBuf, warmup: usize, iters: usize) -> anyhow::Result<Vec<f64>> {
-    fn pre(path: &PathBuf) -> anyhow::Result<BmvmModule> {
-        let module = ModuleBuilder::new()
+    fn pre(path: &PathBuf) -> anyhow::Result<(Upcall<(), ()>, BmvmModule)> {
+        let mut module = ModuleBuilder::new()
             .configure_vm(ConfigBuilder::new().shared_memory(AlignedUsize::new_aligned(0).unwrap()))
             .configure_linker(linker::ConfigBuilder::new().register_guest_function::<(), ()>("run"))
             .with_path(path)
             .build()?;
-        Ok(module)
+
+        let run = module.get_upcall::<(), ()>("run")?;
+        Ok((run, module))
     }
-    fn exec(guest: &mut BmvmModule) -> anyhow::Result<f64> {
+    fn exec((run, guest): &mut (Upcall<(), ()>, BmvmModule)) -> anyhow::Result<f64> {
         let now = Instant::now();
-        guest.call::<(), ()>("run", ())?;
+        run.call(guest, ())?;
         let elapsed = now.elapsed();
         Ok(elapsed.as_nanos() as f64)
     }
-    fn post(_: &mut BmvmModule) -> anyhow::Result<()> {
+    fn post(_: &mut (Upcall<(), ()>, BmvmModule)) -> anyhow::Result<()> {
         Ok(())
     }
     bench(path, warmup, iters, pre, exec, post)

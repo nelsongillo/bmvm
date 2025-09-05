@@ -163,8 +163,15 @@ dependencies = [
  "memchr",
  "sealed",
  "spin",
- "talc",
+ "talc 4.4.3 (git+https://github.com/nelsongillo/talc?rev=5326479972ab9aeda64ccb2920a194cd510050a3)",
  "thiserror 2.0.15",
+]
+
+[[package]]
+name = "bmvm-echo"
+version = "0.1.0"
+dependencies = [
+ "bmvm-guest",
 ]
 
 [[package]]
@@ -198,6 +205,7 @@ dependencies = [
  "rustc-hash",
  "sealed",
  "thiserror 2.0.15",
+ "wasmtime",
 ]
 
 [[package]]
@@ -850,7 +858,6 @@ dependencies = [
  "bmvm-host",
  "clap",
  "env_logger",
- "inventory",
  "log",
 ]
 
@@ -1066,9 +1073,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.27"
+version = "0.4.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13dc2df351e3202783a1fe0d44375f7295ffb4049267b0f3018346dc122a1d94"
+checksum = "34080505efa8e45a4b816c349525ebe327ceaa8559756f0356cba97ef3bf7432"
 
 [[package]]
 name = "mach2"
@@ -1603,6 +1610,15 @@ dependencies = [
 [[package]]
 name = "talc"
 version = "4.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3ae828aa394de34c7de08f522d1b86bd1c182c668d27da69caadda00590f26d"
+dependencies = [
+ "lock_api",
+]
+
+[[package]]
+name = "talc"
+version = "4.4.3"
 source = "git+https://github.com/nelsongillo/talc?rev=5326479972ab9aeda64ccb2920a194cd510050a3#5326479972ab9aeda64ccb2920a194cd510050a3"
 dependencies = [
  "lock_api",
@@ -1878,6 +1894,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1a05d73b933a847d6cccdda8f838a22ff101ad9bf93e33684f39c1f5f0eece3d"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "wasm-echo"
+version = "0.1.0"
+dependencies = [
+ "spin",
+ "talc 4.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]

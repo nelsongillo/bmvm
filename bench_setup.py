@@ -73,6 +73,9 @@ def build_project(name, project, output, target, feature=None, build_target=None
         print(f"No release binaries found in {target_dir}")
         return
 
+    if "wasm" in build_target:
+        name = name + ".wasm"
+
     # copy the binary to the output directory
     src = target_dir / name
     dst = output / name

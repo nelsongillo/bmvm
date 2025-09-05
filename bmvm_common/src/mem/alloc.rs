@@ -482,6 +482,12 @@ pub struct ForeignBuf {
     pub(crate) capacity: NonZeroUsize,
 }
 
+impl ForeignBuf {
+    pub fn len(&self) -> usize {
+        self.capacity.get()
+    }
+}
+
 impl AsRef<[u8]> for ForeignBuf {
     fn as_ref(&self) -> &[u8] {
         let alloc = ALLOC.get().unwrap();

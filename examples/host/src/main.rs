@@ -1,4 +1,4 @@
-use bmvm_host::{ConfigBuilder, ModuleBuilder, expose, linker};
+use bmvm_host::{ModuleBuilder, linker};
 use clap::Parser;
 use std::path::PathBuf;
 
@@ -15,14 +15,6 @@ struct Args {
     debug: bool,
 }
 
-const FUNC_HYPERCALL_REDIRECT: &str = "hypercall_redirect";
-
-#[expose]
-pub fn add(a: u64, b: u64) -> u64 {
-    let result = a + b;
-    result
-}
-
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
@@ -35,22 +27,24 @@ fn main() -> anyhow::Result<()> {
     .init();
 
     // configuration
-    let cfg = ConfigBuilder::new().debug(args.debug);
-    let linker =
-        linker::ConfigBuilder::new().register_guest_function::<(), u64>(FUNC_HYPERCALL_REDIRECT);
+    let linker = linker::ConfigBuilder::new()
+        .register_guest_function::<(), ()>("noop")
+        .build();
 
     let path = PathBuf::from(args.guest);
-
-    let runtime = ModuleBuilder::new()
+    let mut module = ModuleBuilder::new()
+        .with_path(&path)
         .configure_linker(linker)
-        .configure_vm(cfg)
-        .with_path(path.as_path())
         .build()?;
-    let mut module = runtime.setup()?;
 
-    let expect = 30;
-    let result = module.call::<(), u64>(FUNC_HYPERCALL_REDIRECT, ())?;
-    // log::info!("DONE: {FUNC_HYPERCALL_REDIRECT}");
-    assert_eq!(result, expect);
+    let noop = module.get_upcall::<(), ()>("noop")?;
+
+    let now = std::time::Instant::now();
+
+    for i in 0..2_000_000 {
+        noop.call(&mut module, ())?;
+    }
+
+    println!("DONE IN {:?}", now.elapsed());
     Ok(())
 }

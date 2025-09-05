@@ -1,4 +1,4 @@
-use bmvm_host::{Buffer, ModuleBuilder};
+use bmvm_host::ModuleBuilder;
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::path::PathBuf;

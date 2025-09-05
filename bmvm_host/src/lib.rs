@@ -11,6 +11,7 @@ mod utils;
 mod vm;
 
 use bmvm_common::mem::{AddrSpace, Align, DefaultAddrSpace, Page4KiB, PhysAddr, align_floor};
+use std::marker::PhantomData;
 use std::sync::OnceLock;
 
 // re-export bmvm-common
@@ -18,9 +19,10 @@ pub use bmvm_common::TypeSignature;
 pub use bmvm_common::hash::SignatureHasher;
 pub use bmvm_common::mem;
 pub use bmvm_common::registry;
+use bmvm_common::registry::Params;
 pub use bmvm_common::vmi;
+use bmvm_common::vmi::FnPtr;
 pub use bmvm_common::vmi::{ForeignShareable, OwnedShareable, Signature, Transport};
-
 // re-export bmvm-macros
 pub use bmvm_macros::{TypeSignature, expose_host as expose};
 
@@ -29,6 +31,36 @@ pub use elf::Buffer;
 pub use linker::hypercall::{CallableFunction, HypercallResult, WrapperFunc};
 pub use runtime::*;
 pub use vm::{Config, ConfigBuilder};
+
+pub struct Upcall<P, R>
+where
+    P: Params,
+    R: ForeignShareable,
+{
+    pub(crate) name: &'static str,
+    pub(crate) ptr: FnPtr,
+    _params: PhantomData<P>,
+    _result: PhantomData<R>,
+}
+
+impl<P, R> Upcall<P, R>
+where
+    P: Params,
+    R: ForeignShareable,
+{
+    const fn new(name: &'static str, ptr: FnPtr) -> Self {
+        Self {
+            name,
+            ptr,
+            _params: PhantomData,
+            _result: PhantomData,
+        }
+    }
+
+    pub fn call(&self, module: &mut Module, params: P) -> Result<R, Error> {
+        module.call(self, params)
+    }
+}
 
 /// The default stack size for the guest (8MiB)
 pub(crate) const GUEST_DEFAULT_STACK_SIZE: usize = 8 * 1024 * 1024;

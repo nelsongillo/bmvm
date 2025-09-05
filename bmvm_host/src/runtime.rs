@@ -1,5 +1,5 @@
 use crate::{
-    elf,
+    Upcall, elf,
     elf::{Buffer, ExecBundle},
 };
 use crate::{linker, vm};
@@ -47,15 +47,25 @@ impl Module {
         Ok(Self { vm })
     }
 
+    pub fn get_upcall<P, R>(&mut self, name: &'static str) -> Result<Upcall<P, R>>
+    where
+        P: Params,
+        R: ForeignShareable,
+    {
+        let func = self.vm.find_upcall::<P, R>(name)?;
+
+        Ok(Upcall::new(name, func.ptr().unwrap()))
+    }
+
     /// Try calling a function on the guest with the provided parameters.
     /// Error if the function is not found or the signatures do not match.
-    pub fn call<P, R>(&mut self, func: &'static str, params: P) -> Result<R>
+    pub(crate) fn call<P, R>(&mut self, upcall: &Upcall<P, R>, params: P) -> Result<R>
     where
         P: Params,
         R: ForeignShareable,
     {
         self.vm
-            .upcall_exec_setup::<P, R>(func, params)
+            .upcall_exec_setup::<P, R>(upcall, params)
             .map_err(Error::Upcall)?;
         self.vm.run()?;
         self.vm.upcall_result::<R>().map_err(Error::Upcall)

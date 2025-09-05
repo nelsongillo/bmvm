@@ -8,7 +8,7 @@ use bmvm_common::{BMVM_META_SECTION_EXPOSE, BMVM_META_SECTION_EXPOSE_CALLS};
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TS};
 use quote::quote;
-use syn::{Ident, ItemFn, parse_macro_input};
+use syn::{Ident, ItemFn, ReturnType, parse_macro_input};
 
 /// Procedural macro implementation:
 /// * Checks that all function parameters implement TypeSignature and return type implements OwnedShareable trait
@@ -74,7 +74,13 @@ pub fn expose_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     // function wrapper generation
-    let wrapper = gen_wrapper(&mother, fn_name, &wrapper_fn_name, &param_type);
+    let wrapper = gen_wrapper(
+        &mother,
+        fn_name,
+        &wrapper_fn_name,
+        &param_type,
+        &input_fn.sig.output,
+    );
     // optionally indicate debug information in the metadata
     let debug = gen_call_meta_debug(&proc_macro2::Ident::new(
         fn_name.to_string().as_str(),
@@ -90,6 +96,7 @@ pub fn expose_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
         #meta
         #transport_struct_definition
         #wrapper
+        #[inline]
         #input_fn
 
         #[used]
@@ -104,7 +111,13 @@ pub fn expose_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 /// Generates the upcall wrapper, which will be called by the Upcall-Handler
-fn gen_wrapper(mother: &Ident, fn_name: &Ident, fn_name_wrapper: &Ident, params: &ParamType) -> TS {
+fn gen_wrapper(
+    mother: &Ident,
+    fn_name: &Ident,
+    fn_name_wrapper: &Ident,
+    params: &ParamType,
+    ret_type: &ReturnType,
+) -> TS {
     let exit_code_return = quote! {#mother::ExitCode::Return};
     let ty_transport = quote! {#mother::Transport};
     let foreign = quote! {#mother::Foreign};
@@ -170,23 +183,46 @@ fn gen_wrapper(mother: &Ident, fn_name: &Ident, fn_name_wrapper: &Ident, params:
         }
     };
 
+    let result = match ret_type {
+        ReturnType::Default => {
+            quote! {
+                // Halt to indicate function exit and populate return registers
+                let __exit_code: u8 = #exit_code_return.as_u8();
+                unsafe {
+                    core::arch::asm! (
+                        "mov bl, {0}",
+                        "hlt",
+                        in(reg_byte) __exit_code,
+                        options(noreturn)
+                    );
+                }
+            }
+        }
+        _ => {
+            quote! {
+                use #owned_shareable;
+                let __output = #var_return.into_transport();
+                // Halt to indicate function exit and populate return registers
+                let __exit_code: u8 = #exit_code_return.into();
+                unsafe {
+                    core::arch::asm! (
+                        "mov bl, {0}",
+                        "hlt",
+                        in(reg_byte) __exit_code,
+                        in("r8") __output.primary(),
+                        in("r9") __output.secondary(),
+                        options(noreturn)
+                    );
+                }
+            }
+        }
+    };
+
     quote! {
         #[unsafe(no_mangle)]
         pub extern "C" fn #fn_name_wrapper() {
             #func_call
-            use #owned_shareable;
-            let __output = #var_return.into_transport();
-            // Halt to indicate function exit and populate return registers
-            let __exit_code: u8 = #exit_code_return.into();
-            unsafe {
-                core::arch::asm! (
-                    "mov bl, {0}",
-                    "hlt",
-                    in(reg_byte) __exit_code,
-                    in("r8") __output.primary(),
-                    in("r9") __output.secondary(),
-                );
-            }
+            #result
         }
     }
 }

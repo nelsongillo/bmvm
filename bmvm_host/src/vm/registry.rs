@@ -5,6 +5,7 @@ use bmvm_common::error::ExitCode;
 use bmvm_common::mem;
 use bmvm_common::registry::Params;
 use bmvm_common::vmi::{ForeignShareable, Signature, Transport};
+use rustc_hash::FxHashMap;
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -55,7 +56,7 @@ impl From<Vec<hypercall::Function>> for Hypercalls {
 
 #[derive(Debug)]
 pub(super) struct Upcalls {
-    inner: Vec<upcall::Function>,
+    inner: FxHashMap<Signature, upcall::Function>,
 }
 
 impl Default for Upcalls {
@@ -65,26 +66,29 @@ impl Default for Upcalls {
 }
 
 impl Upcalls {
+    #[inline]
     pub fn find_upcall<P, R>(&self, name: &'static str) -> Result<&upcall::Function>
     where
         P: Params,
         R: ForeignShareable,
     {
-        let sig = compute_signature::<P, R>(name);
-        let idx = match self.inner.binary_search_by_key(&sig, |f| f.base.sig) {
-            Ok(idx) => idx,
-            Err(_) => return Err(Error::UnknownFunction(sig)),
+        let sig: u64 = compute_signature::<P, R>(name);
+        let func = match self.inner.get(&sig) {
+            Some(idx) => idx,
+            None => return Err(Error::UnknownFunction(sig)),
         };
+        func.ptr().ok_or_else(|| Error::UnlikedUpcall(sig))?;
 
-        let func = &self.inner[idx];
-        let _ = func.ptr().ok_or(Error::UnlikedUpcall(sig))?;
-        Ok(&self.inner[idx])
+        Ok(func)
     }
 }
 
 impl From<Vec<upcall::Function>> for Upcalls {
     fn from(mut functions: Vec<upcall::Function>) -> Self {
-        functions.sort_by_key(|f| f.base.sig);
-        Self { inner: functions }
+        let mut map = FxHashMap::with_capacity_and_hasher(functions.len(), Default::default());
+        for func in functions.drain(..) {
+            map.insert(func.base.sig, func);
+        }
+        Self { inner: map }
     }
 }

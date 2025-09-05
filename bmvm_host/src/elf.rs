@@ -238,7 +238,7 @@ impl ExecBundle {
                 &buf[section.sh_offset as usize..(section.sh_offset + section.sh_size) as usize];
 
             if content.is_empty() {
-                // log::warn!("VMI section defined but empty: {}", section_name);
+                log::warn!("VMI section defined but empty: {}", section_name);
                 return Ok(Vec::new());
             }
 

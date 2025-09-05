@@ -5,7 +5,7 @@ use crate::vm::registry::{Hypercalls, Upcalls};
 use crate::vm::setup::{GDT_PAGE_REQUIRED, GDT_SIZE, IDT_PAGE_REQUIRED, IDT_SIZE};
 use crate::vm::vcpu::Vcpu;
 use crate::vm::{Config, paging, registry, setup, vcpu};
-use crate::{GUEST_PAGING_ADDR, GUEST_STACK_ADDR, GUEST_SYSTEM_ADDR};
+use crate::{GUEST_PAGING_ADDR, GUEST_STACK_ADDR, GUEST_SYSTEM_ADDR, Upcall};
 use bmvm_common::error::ExitCode;
 use bmvm_common::interprete::Interpret;
 use bmvm_common::mem;
@@ -222,7 +222,7 @@ impl Vm {
                             self.state = State::Shutdown;
                         }
                         ExitCode::Ready => {
-                            // log::info!("Guest Setup done, ready to execute");
+                            log::info!("Guest Setup done, ready to execute");
                             self.state = State::Ready;
                         }
                         ExitCode::Return => {
@@ -273,17 +273,22 @@ impl Vm {
 
 // Implementation regarding the guest-host interaction
 impl Vm {
-    /// Setup the guest environment to execute the upcall
-    pub fn upcall_exec_setup<P, R>(&mut self, name: &'static str, params: P) -> Result<()>
+    pub fn find_upcall<P, R>(&mut self, name: &'static str) -> Result<&upcall::Function>
     where
         P: Params,
         R: ForeignShareable,
     {
-        let func = self
-            .upcalls
+        self.upcalls
             .find_upcall::<P, R>(name)
-            .map_err(Error::UpcallInit)?;
+            .map_err(Error::UpcallInit)
+    }
 
+    /// Setup the guest environment to execute the upcall
+    pub fn upcall_exec_setup<P, R>(&mut self, upcall: &Upcall<P, R>, params: P) -> Result<()>
+    where
+        P: Params,
+        R: ForeignShareable,
+    {
         let transport = params.into_transport().map_err(Error::UpcallExec)?;
 
         self.vcpu.mutate_regs(|regs| {
@@ -292,8 +297,8 @@ impl Vm {
             regs.r9 = transport.secondary();
 
             // Set the function pointer
-            regs.rip = func.ptr().unwrap().as_u64();
-            log::info!("Calling function '{name}'");
+            regs.rip = upcall.ptr.as_u64();
+            log::info!("Calling function '{}'", upcall.name);
             true
         })?;
 
@@ -333,7 +338,7 @@ impl Vm {
         // write the result to the registers
         regs.r8 = output.primary();
         regs.r9 = output.secondary();
-        // log::debug!("Result: transport={}", output);
+        log::debug!("Result: transport={}", output);
         self.vcpu.set_regs(regs);
 
         // restore the previous state

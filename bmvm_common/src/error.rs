@@ -77,8 +77,26 @@ pub enum ExitCode {
 }
 
 impl ExitCode {
-    pub fn as_u8(self) -> u8 {
-        self.into()
+    pub const fn as_u8(self) -> u8 {
+        match self {
+            ExitCode::Normal => 0,
+            ExitCode::Ready => 1,
+            ExitCode::Return => 2,
+            ExitCode::Ptr(_) => 3,
+            ExitCode::NullPtr => 4,
+            ExitCode::AllocatorInitFailed => 5,
+            ExitCode::AllocationFailed => 6,
+            ExitCode::InvalidMemoryLayoutTableTooSmall => 7,
+            ExitCode::InvalidMemoryLayoutTableMisaligned => 8,
+            ExitCode::InvalidMemoryLayout => 9,
+            ExitCode::FrameAllocationFailed => 10,
+            ExitCode::ParentEntryHugePage => 11,
+            ExitCode::PageAlreadyMapped => 12,
+            ExitCode::UnknownUpcall(_) => 13,
+            ExitCode::ZeroCapacity => 14,
+            ExitCode::Panic(_) => 254,
+            ExitCode::Unmapped(value) => value,
+        }
     }
 }
 

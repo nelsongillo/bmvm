@@ -3,6 +3,9 @@ name = "bmvm-host"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+benchmarks = ["log/release_max_level_off"]
+
 [dependencies]
 nix = { version = "0.30.1", features = ["mman"] }
 goblin = "0.10.0"
@@ -12,7 +15,7 @@ sealed = "0.6.0"
 thiserror = "2.0.12"
 inventory = "0.3.20"
 rustc-hash = "2.1.1"
-log = "0.4.27"
+log = "0.4.28"
 
 bmvm-common = {path = "../bmvm_common", features = ["vmi-consume"]}
 bmvm-macros = { path = "../bmvm_macros", default-features = false, features = ["host", "vmi-consume"] }
@@ -20,9 +23,14 @@ bmvm-macros = { path = "../bmvm_macros", default-features = false, features = ["
 
 [dev-dependencies]
 criterion = { version = "0.7.0", features = ["html_reports"] }
+wasmtime = "36.0.2"
 
 [[bench]]
 name = "startup"
+harness = false
+
+[[bench]]
+name = "echo"
 harness = false
 
 [profile.release]
