@@ -6,7 +6,7 @@ use core::mem::ManuallyDrop;
 use core::num::NonZeroUsize;
 use core::ptr::NonNull;
 use spin::once::Once;
-use talc::{ErrOnOom, Span, Talc};
+use talc::{ErrOnOom, Span, Talck};
 
 static ALLOC: Once<AllocImpl<spin::Mutex<()>, ErrOnOom>> = Once::new();
 
@@ -38,21 +38,18 @@ pub enum Error {
     InvalidOffsetPtr,
 }
 
-struct AllocImpl<M: lock_api::RawMutex, O: talc::OomHandler> {
-    talck: talc::Talck<M, O>,
+struct AllocImpl<'a, M: lock_api::RawMutex, O: talc::OomHandler> {
+    talck: &'a Talck<M, O>,
     base: VirtAddr,
     capacity: usize,
 }
 
-impl<M: lock_api::RawMutex, O: talc::OomHandler> AllocImpl<M, O> {
+impl<'a, M: lock_api::RawMutex, O: talc::OomHandler> AllocImpl<'a, M, O> {
     #[allow(dead_code)]
     fn new(oom: O, arena: Arena) -> Result<Self, Error> {
-        let mut talc = Talc::new(oom);
-        let span = unsafe {
-            talc.claim(arena.into())
-                .map_err(|_| Error::InitNotEnoughSpace)?
+        let (talck, span) = unsafe {
+            Talck::<M, O>::new_in_place(oom, arena.into()).map_err(|_| Error::InitSharedFailed)?
         };
-        let talck = talc.lock::<M>();
 
         let (b, _) = span.get_base_acme().unwrap();
         let base = VirtAddr::from_ptr(b);
@@ -65,11 +62,9 @@ impl<M: lock_api::RawMutex, O: talc::OomHandler> AllocImpl<M, O> {
     }
 
     #[allow(dead_code)]
-    fn new_shared(oom: O, arena: Arena) -> Result<Self, Error> {
-        let (talc, span) = unsafe {
-            Talc::new_with_shared_heap(oom, arena.into()).map_err(|_| Error::InitSharedFailed)?
-        };
-        let talck = talc.lock::<M>();
+    fn new_shared(arena: Arena) -> Result<Self, Error> {
+        let (talck, span) =
+            unsafe { Talck::<M, O>::get_from(arena.into()).map_err(|_| Error::InitSharedFailed)? };
 
         let (b, _) = span.get_base_acme().unwrap();
         let base = VirtAddr::from_ptr(b);
@@ -194,7 +189,7 @@ pub fn init(arena: Option<Arena>) {
 #[cfg(feature = "vmi-execute")]
 pub fn init(arena: Option<Arena>) {
     if let Some(arena) = arena {
-        ALLOC.call_once(|| match AllocImpl::new_shared(ErrOnOom, arena) {
+        ALLOC.call_once(|| match AllocImpl::new_shared(arena) {
             Ok(alloc) => alloc,
             Err(_) => panic!("Failed to initialize allocator"),
         });

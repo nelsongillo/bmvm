@@ -15,7 +15,7 @@ bitflags = "2.9.1"
 lock_api = "0.4.13"
 sealed = "0.6.0"
 spin = { version = "0.10.0", default-features = false, features = ["once", "mutex", "spin_mutex", "lock_api"] }
-talc = { git = "https://github.com/nelsongillo/talc", rev = "5326479972ab9aeda64ccb2920a194cd510050a3" }
+talc = { git = "https://github.com/nelsongillo/talc", rev = "c379c755e5c2142e8a6ce970e16a5ca05e6b2234" }
 
 anyhow = { version = "1.0.98", optional = true }
 memchr = { version = "2.7.4", optional = true }
