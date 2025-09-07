@@ -17,5 +17,5 @@ members = [
     # Benchmark Guests
     "bench/bmvm_guest_noop",
     "bench/bmvm_echo",
-    "bench/wasm_echo",
+    "bench/wasm_echo", "examples/wasm",
 ]

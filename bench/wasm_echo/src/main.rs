@@ -19,7 +19,7 @@ static ALLOCATOR: Talck<spin::Mutex<()>, ClaimOnOom> =
 pub unsafe extern "C" fn noop() {}
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn reverse_bytes(ptr: *const u8, len: usize) -> *mut u8 {
+pub unsafe extern "C" fn reverse(ptr: *const u8, len: usize) -> *mut u8 {
     let input = unsafe { slice::from_raw_parts(ptr, len) };
 
     let mut buf = Vec::with_capacity(len);
@@ -30,6 +30,14 @@ pub unsafe extern "C" fn reverse_bytes(ptr: *const u8, len: usize) -> *mut u8 {
     let out = boxed.as_mut_ptr();
     core::mem::forget(boxed);
     out
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn alloc(size: i32) -> *mut u8 {
+    let mut buf = Vec::with_capacity(size as usize);
+    let ptr = buf.as_mut_ptr();
+    core::mem::forget(buf); // don't free it, WASM owns it now
+    ptr
 }
 
 #[unsafe(no_mangle)]

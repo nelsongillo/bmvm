@@ -1,5 +1,7 @@
-use bmvm_host::{ModuleBuilder, linker};
+use bmvm_host::mem::{AlignedNonZeroUsize, ForeignBuf, SharedBuf, alloc_buf};
+use bmvm_host::{ConfigBuilder, ModuleBuilder, linker};
 use clap::Parser;
+use std::hint::black_box;
 use std::path::PathBuf;
 
 const ENV_GUEST: &str = "GUEST";
@@ -29,20 +31,29 @@ fn main() -> anyhow::Result<()> {
     // configuration
     let linker = linker::ConfigBuilder::new()
         .register_guest_function::<(), ()>("noop")
+        .register_guest_function::<(SharedBuf,), ForeignBuf>("reverse")
         .build();
 
+    let vm = ConfigBuilder::new()
+        .debug(args.debug)
+        .stack_size(AlignedNonZeroUsize::new_ceil(BMVM_STACK).unwrap());
+
+    const BMVM_STACK: usize = 32 * 1024 * 1024; // 32MiB
     let path = PathBuf::from(args.guest);
     let mut module = ModuleBuilder::new()
         .with_path(&path)
         .configure_linker(linker)
+        .configure_vm(vm)
         .build()?;
 
-    let noop = module.get_upcall::<(), ()>("noop")?;
+    let reverse = module
+        .get_upcall::<(SharedBuf,), ForeignBuf>("reverse")
+        .unwrap();
 
     let now = std::time::Instant::now();
-
-    for i in 0..2_000_000 {
-        noop.call(&mut module, ())?;
+    for _ in 0..2_000_000 {
+        let owned = unsafe { alloc_buf(1024)? };
+        let _ =  reverse.call(&mut module, (owned.into_shared(),)).unwrap();
     }
 
     println!("DONE IN {:?}", now.elapsed());

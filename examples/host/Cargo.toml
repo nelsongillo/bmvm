@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bmvm-host = { path = "../../bmvm_host"}
+bmvm-host = { path = "../../bmvm_host", features = ["benchmarks"]}
 anyhow = "1.0.98"
 env_logger = "0.11.8"
 log = "0.4.27"
