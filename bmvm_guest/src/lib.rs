@@ -19,7 +19,7 @@ pub use bmvm_common::mem::{
     alloc, alloc_buf, dealloc, dealloc_buf, get_foreign,
 };
 pub use bmvm_common::vmi::{ForeignShareable, OwnedShareable, Signature, Transport, UpcallFn};
-pub use bmvm_common::{HYPERCALL_IO_PORT, TypeSignature};
+pub use bmvm_common::{EXIT_IO_PORT, HYPERCALL_IO_PORT, TypeSignature};
 
 // re-export: bmvm-macros
 use crate::panic::ready;

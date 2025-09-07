@@ -126,6 +126,7 @@ fn gen_wrapper(
     let exit_with_code = quote! {#mother::exit_with_code};
     let var_params = Ident::new(VAR_NAME_PARAM, Span::call_site());
     let var_return = Ident::new(VAR_NAME_RETURN, Span::call_site());
+    let port_exit = quote! {#mother::EXIT_IO_PORT};
 
     let func_call = match params {
         ParamType::Void => {
@@ -190,10 +191,10 @@ fn gen_wrapper(
                 let __exit_code: u8 = #exit_code_return.as_u8();
                 unsafe {
                     core::arch::asm! (
-                        "mov bl, {0}",
-                        "hlt",
-                        in(reg_byte) __exit_code,
-                        options(noreturn)
+                        "out dx, al",
+                        in("dx") #port_exit,
+                        in("al") __exit_code,
+                        options(nomem, nostack, preserves_flags, noreturn),
                     );
                 }
             }
@@ -206,12 +207,12 @@ fn gen_wrapper(
                 let __exit_code: u8 = #exit_code_return.into();
                 unsafe {
                     core::arch::asm! (
-                        "mov bl, {0}",
-                        "hlt",
-                        in(reg_byte) __exit_code,
+                        "out dx, al",
+                        in("dx") #port_exit,
+                        in("al") __exit_code,
                         in("r8") __output.primary(),
                         in("r9") __output.secondary(),
-                        options(noreturn)
+                        options(nomem, nostack, preserves_flags, noreturn),
                     );
                 }
             }

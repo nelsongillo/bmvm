@@ -16,7 +16,7 @@ use bmvm_common::mem::{
 };
 use bmvm_common::registry::Params;
 use bmvm_common::vmi::{ForeignShareable, Transport};
-use bmvm_common::{BMVM_MEM_LAYOUT_TABLE, HYPERCALL_IO_PORT};
+use bmvm_common::{BMVM_MEM_LAYOUT_TABLE, EXIT_IO_PORT, HYPERCALL_IO_PORT};
 use kvm_bindings::{KVM_API_VERSION, kvm_regs};
 use kvm_ioctls::{Cap, Kvm, VcpuExit, VmFd};
 use std::io::Write;
@@ -203,58 +203,62 @@ impl Vm {
                 // IO Out should only be triggered by the hypercall
                 // execute hypercall or log warning otherwise
                 VcpuExit::IoOut(port, data) => {
-                    if port == HYPERCALL_IO_PORT {
-                        self.hypercall_exec()?;
-                    } else {
-                        log::warn!(
-                            "Unexpected IO write on port {:#x} with data {:X?}",
-                            port,
-                            data,
-                        );
-                    }
-                }
-                // Check the exit code and react accordingly
-                VcpuExit::Hlt => {
-                    let exit_code = ExitCode::from((self.vcpu.read_regs()?.rax & 0xFF) as u8);
-                    match exit_code {
-                        ExitCode::Normal => {
-                            log::info!("Guest triggered VM shutdown");
-                            self.state = State::Shutdown;
+                    match port {
+                        HYPERCALL_IO_PORT => {
+                            self.hypercall_exec()?;
                         }
-                        ExitCode::Ready => {
-                            log::info!("Guest Setup done, ready to execute");
-                            self.state = State::Ready;
-                        }
-                        ExitCode::Return => {
-                            if self.state != State::UpcallExec {
-                                return Err(Error::UnexpectedUpcallReturn);
-                            }
+                        EXIT_IO_PORT => {
+                            // Check the exit code and react accordingly
+                            let exit_code = ExitCode::from(data[0]);
+                            match exit_code {
+                                ExitCode::Normal => {
+                                    log::info!("Guest triggered VM shutdown");
+                                    self.state = State::Shutdown;
+                                }
+                                ExitCode::Ready => {
+                                    log::info!("Guest Setup done, ready to execute");
+                                    self.state = State::Ready;
+                                }
+                                ExitCode::Return => {
+                                    if self.state != State::UpcallExec {
+                                        return Err(Error::UnexpectedUpcallReturn);
+                                    }
 
-                            log::info!("Guest returned from upcall");
-                            self.state = State::UpcallExec;
-                        }
-                        ExitCode::Panic(vaddr) => unsafe {
-                            log::error!("Panic occurred: {vaddr:X}");
+                                    log::info!("Guest returned from upcall");
+                                    self.state = State::UpcallExec;
+                                }
+                                ExitCode::Panic(vaddr) => unsafe {
+                                    log::error!("Panic occurred: {vaddr:X}");
 
-                            let _ = &self.print_debug_info()?;
-                            let _ = &self.dump_region(0x1000)?;
-                            let paddr = PhysAddr::from(vaddr);
-                            if let Some(r) = self.mem_mappings.get(paddr) {
-                                let offset = paddr.as_usize() - r.as_ptr() as usize;
-                                let ptr = r.as_ptr().add(offset).cast::<core::panic::PanicInfo>();
-                                let reference = &*ptr;
-                                log::error!("Panic at {}", reference);
+                                    let _ = &self.print_debug_info()?;
+                                    let _ = &self.dump_region(0x1000)?;
+                                    let paddr = PhysAddr::from(vaddr);
+                                    if let Some(r) = self.mem_mappings.get(paddr) {
+                                        let offset = paddr.as_usize() - r.as_ptr() as usize;
+                                        let ptr =
+                                            r.as_ptr().add(offset).cast::<core::panic::PanicInfo>();
+                                        let reference = &*ptr;
+                                        log::error!("Panic at {}", reference);
+                                    }
+                                    return Err(Error::UnexpectedExit);
+                                },
+                                _ => {
+                                    log::error!("Exit Code: {:?}", exit_code);
+                                    return Err(Error::UnhandledHalt(exit_code));
+                                }
                             }
-                            return Err(Error::UnexpectedExit);
-                        },
+                            self.react_to_exit_code(exit_code)?;
+
+                            return Ok(());
+                        }
                         _ => {
-                            log::error!("Exit Code: {:?}", exit_code);
-                            return Err(Error::UnhandledHalt(exit_code));
+                            log::warn!(
+                                "Unexpected IO write on port {:#x} with data {:X?}",
+                                port,
+                                data,
+                            );
                         }
                     }
-                    self.react_to_exit_code(exit_code)?;
-
-                    return Ok(());
                 }
                 VcpuExit::Debug(_debug) => {
                     self.print_debug_info()?;
