@@ -28,20 +28,22 @@ fn main() {
         .expect("no memory export");
 
     let mut buf = [0u8; 64];
-    (0..1000000).for_each(|i| black_box({
-        // buffer prep + copy to wasm memory
-        let ptr = alloc.call(&mut store, (64,)).unwrap();
-        memory
-            .write(&mut store, ptr as usize, buf.as_slice())
-            .unwrap();
-        // call wasm function and get result
-        let rev = reverse.call(&mut store, (ptr as i32, 64)).unwrap();
-        memory
-            .read(&mut store, rev as usize, buf.as_mut_slice())
-            .unwrap();
-        // free wasm memory to restore original state
-        free.call(&mut store, (ptr as i32, 64)).unwrap();
-        free.call(&mut store, (rev as i32, 64)).unwrap();
-        println!("{i}")
-    }))
+    (0..1000000).for_each(|i| {
+        black_box({
+            // buffer prep + copy to wasm memory
+            let ptr = alloc.call(&mut store, (64,)).unwrap();
+            memory
+                .write(&mut store, ptr as usize, buf.as_slice())
+                .unwrap();
+            // call wasm function and get result
+            let rev = reverse.call(&mut store, (ptr as i32, 64)).unwrap();
+            memory
+                .read(&mut store, rev as usize, buf.as_mut_slice())
+                .unwrap();
+            // free wasm memory to restore original state
+            free.call(&mut store, (ptr as i32, 64)).unwrap();
+            free.call(&mut store, (rev as i32, 64)).unwrap();
+            println!("{i}")
+        })
+    })
 }

@@ -4,8 +4,8 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::path::PathBuf;
 use std::time::Duration;
-use wasmtime::{Engine, Instance, Module as WasmModule, Store};
 use wasmtime::component::__internal::wasmtime_environ::object::ReadRef;
+use wasmtime::{Engine, Instance, Module as WasmModule, Store};
 
 const BMVM: &str = "../bench/binaries/bmvm-echo";
 const WASM: &str = "../bench/binaries/wasm-echo.wasm";
@@ -32,7 +32,9 @@ pub fn bmvm_echo_noop(c: &mut Criterion) {
 
     let noop = module.get_upcall::<(), ()>("noop").unwrap();
 
-    let reverse = module.get_upcall::<(SharedBuf,), ForeignBuf>("reverse").unwrap();
+    let reverse = module
+        .get_upcall::<(SharedBuf,), ForeignBuf>("reverse")
+        .unwrap();
 
     group.bench_function("noop", |b| {
         b.iter(|| {
@@ -45,7 +47,7 @@ pub fn bmvm_echo_noop(c: &mut Criterion) {
     group.bench_function("reverse-64", |b| {
         b.iter(|| {
             black_box({
-                let owned = unsafe {alloc_buf(64).unwrap()};
+                let owned = unsafe { alloc_buf(64).unwrap() };
                 let _ = reverse.call(&mut module, (owned.into_shared(),)).unwrap();
             })
         })
@@ -54,7 +56,7 @@ pub fn bmvm_echo_noop(c: &mut Criterion) {
     group.bench_function("reverse-256", |b| {
         b.iter(|| {
             black_box({
-                let owned = unsafe {alloc_buf(256).unwrap()};
+                let owned = unsafe { alloc_buf(256).unwrap() };
                 let _ = reverse.call(&mut module, (owned.into_shared(),)).unwrap();
             })
         })
@@ -63,7 +65,7 @@ pub fn bmvm_echo_noop(c: &mut Criterion) {
     group.bench_function("reverse-1024", |b| {
         b.iter(|| {
             black_box({
-                let owned = unsafe {alloc_buf(1024).unwrap()};
+                let owned = unsafe { alloc_buf(1024).unwrap() };
                 let _ = reverse.call(&mut module, (owned.into_shared(),)).unwrap();
             })
         })
@@ -83,8 +85,6 @@ pub fn wasm_echo_noop(c: &mut Criterion) {
     let noop = instance
         .get_typed_func::<(), ()>(&mut store, "noop")
         .unwrap();
-
-
 
     let reverse = instance
         .get_typed_func::<(i32, i32), i32>(&mut store, "reverse")
@@ -116,7 +116,9 @@ pub fn wasm_echo_noop(c: &mut Criterion) {
             black_box({
                 // buffer prep + copy to wasm memory
                 let ptr = alloc.call(&mut store, (64,)).unwrap();
-                memory.write(&mut store, ptr as usize, buf.as_slice()).unwrap();
+                memory
+                    .write(&mut store, ptr as usize, buf.as_slice())
+                    .unwrap();
                 // call wasm function and get result
                 let rev = reverse.call(&mut store, (ptr as i32, 64)).unwrap();
                 memory
@@ -129,14 +131,15 @@ pub fn wasm_echo_noop(c: &mut Criterion) {
         })
     });
 
-
     group.bench_function("reverse-512", |b| {
         let mut buf = [0u8; 512];
         b.iter(|| {
             black_box({
                 // buffer prep + copy to wasm memory
                 let ptr = alloc.call(&mut store, (512,)).unwrap();
-                memory.write(&mut store, ptr as usize, buf.as_slice()).unwrap();
+                memory
+                    .write(&mut store, ptr as usize, buf.as_slice())
+                    .unwrap();
                 // call wasm function and get result
                 let rev = reverse.call(&mut store, (ptr as i32, 512)).unwrap();
                 memory
@@ -149,14 +152,15 @@ pub fn wasm_echo_noop(c: &mut Criterion) {
         })
     });
 
-
     group.bench_function("reverse-1024", |b| {
         let mut buf = [0u8; 1024];
         b.iter(|| {
             black_box({
                 // buffer prep + copy to wasm memory
                 let ptr = alloc.call(&mut store, (1024,)).unwrap();
-                memory.write(&mut store, ptr as usize, buf.as_slice()).unwrap();;
+                memory
+                    .write(&mut store, ptr as usize, buf.as_slice())
+                    .unwrap();
                 // call wasm function and get result
                 let rev = reverse.call(&mut store, (ptr, 1024)).unwrap();
                 memory

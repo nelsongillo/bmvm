@@ -15,7 +15,9 @@ members = [
     "tooling/printlayout",
     "tooling/vmi-inspect",
     "tooling/benchy",
+    "tooling/fmtns",
+    "tooling/plotty",
     # Benchmark Guests
     "bench/bmvm_echo",
-    "bench/wasm_echo", "tooling/fmtns",
+    "bench/wasm_echo",
 ]

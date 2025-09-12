@@ -53,7 +53,7 @@ fn main() -> anyhow::Result<()> {
     let now = std::time::Instant::now();
     for _ in 0..2_000_000 {
         let owned = unsafe { alloc_buf(1024)? };
-        let _ =  reverse.call(&mut module, (owned.into_shared(),)).unwrap();
+        let _ = reverse.call(&mut module, (owned.into_shared(),)).unwrap();
     }
 
     println!("DONE IN {:?}", now.elapsed());
