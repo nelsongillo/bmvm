@@ -8,15 +8,16 @@ use std::time::Duration;
 #[derive(Debug, Deserialize)]
 pub struct Summary {
     mean: f64,
+    std: f64,
 }
 
 #[derive(Debug)]
 pub struct PlotData {
-    data: HashMap<String, Duration>,
+    data: HashMap<String, (u64, u64)>,
 }
 
 pub fn collect_data(data_dir: &Path) -> Result<PlotData> {
-    let mut data: HashMap<String, Duration> = HashMap::new();
+    let mut data: HashMap<String, (u64, u64)> = HashMap::new();
 
     // First, collect all types (directories) and ensure we have consistent executions
     let dir_entries: Vec<_> = fs::read_dir(data_dir)?
@@ -39,10 +40,10 @@ pub fn collect_data(data_dir: &Path) -> Result<PlotData> {
         let summary: Summary = serde_json::from_str(&summary_content)
             .with_context(|| format!("Failed to parse JSON in {:?}", summary_path))?;
 
-        // Convert nanoseconds to microseconds for better readability
-        let mean = Duration::from_nanos(summary.mean.floor() as u64);
+        let mean = summary.mean.floor() as u64;
+        let stddev = summary.std.floor() as u64;
 
-        data.insert(type_name, mean);
+        data.insert(type_name, (mean, stddev));
     }
 
     Ok(PlotData { data })
@@ -76,12 +77,16 @@ pub fn generate_latex_plot(plot_data: &PlotData, output: &Path) -> Result<()> {
     );
 
     // Add plot for each type
-    for value in plot_data.data.values() {
-        latex.push_str(&format!(
-            "\\addplot coordinates {{ ({},{}) }};\n",
-            1,
-            value.as_nanos()
-        ));
+    for (mean, stddev) in plot_data.data.values() {
+        latex.push_str(
+            r#"
+\addplot+[
+    error bars/.cd,
+    y dir=both,
+    y explicit
+] coordinates {"#,
+        );
+        latex.push_str(&format!("(1,{}) +- (0,{})}};\n", mean, stddev));
     }
 
     let legend = plot_data
