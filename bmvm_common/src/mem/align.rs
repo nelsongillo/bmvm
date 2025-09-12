@@ -173,6 +173,13 @@ macro_rules! impl_aligned {
         pub type $aligned_name<A: Align = DefaultAlign> = Aligned<$int, A>;
 
         impl<A: Align> Aligned<$int, A> {
+            pub const fn zero() -> Self {
+                Self {
+                    inner: 0,
+                    _alignment: PhantomData,
+                }
+            }
+
             /// Creates a new aligned value with floor alignment
             pub fn new_floor(value: $int) -> Self {
                 Self {

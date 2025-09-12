@@ -10,12 +10,12 @@ members = [
     "examples/guest",
     "examples/host",
     "examples/host-bench",
+    "examples/wasm",
     # Debug Tooling
     "tooling/printlayout",
     "tooling/vmi-inspect",
     "tooling/benchy",
     # Benchmark Guests
-    "bench/bmvm_guest_noop",
     "bench/bmvm_echo",
-    "bench/wasm_echo", "examples/wasm",
+    "bench/wasm_echo", "tooling/fmtns",
 ]
