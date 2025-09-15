@@ -254,9 +254,11 @@ dependencies = [
  "kvm-ioctls",
  "log",
  "nix",
+ "raw-cpuid",
  "rustc-hash",
  "sealed",
  "thiserror 2.0.16",
+ "vmm-sys-util",
  "wasmtime",
 ]
 
@@ -1451,6 +1453,15 @@ name = "r-efi"
 version = "5.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
+
+[[package]]
+name = "raw-cpuid"
+version = "11.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "498cd0dc59d73224351ee52a95fee0f1a617a2eae0e7d9d720cc622c73a54186"
+dependencies = [
+ "bitflags 2.9.4",
+]
 
 [[package]]
 name = "rayon"

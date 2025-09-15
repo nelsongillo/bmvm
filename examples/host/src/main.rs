@@ -30,8 +30,7 @@ fn main() -> anyhow::Result<()> {
 
     // configuration
     let linker = linker::ConfigBuilder::new()
-        .register_guest_function::<(), ()>("noop")
-        .register_guest_function::<(SharedBuf,), ForeignBuf>("reverse")
+        .register_guest_function::<(), ()>("run")
         .build();
 
     let vm = ConfigBuilder::new()
@@ -46,15 +45,10 @@ fn main() -> anyhow::Result<()> {
         .configure_vm(vm)
         .build()?;
 
-    let reverse = module
-        .get_upcall::<(SharedBuf,), ForeignBuf>("reverse")
-        .unwrap();
+    let run = module.get_upcall::<(), ()>("run").unwrap();
 
     let now = std::time::Instant::now();
-    for _ in 0..2_000_000 {
-        let owned = unsafe { alloc_buf(1024)? };
-        let _ = reverse.call(&mut module, (owned.into_shared(),)).unwrap();
-    }
+    run.call(&mut module, ()).unwrap();
 
     println!("DONE IN {:?}", now.elapsed());
     Ok(())

@@ -2,8 +2,8 @@ use crate::utils::Dirty;
 use crate::vm::setup::{GDT_BASE, GDT_ENTRY_SIZE, GDT_LIMIT, IDT_ENTRY_SIZE};
 use bmvm_common::mem::{PhysAddr, VirtAddr};
 use kvm_bindings::{
-    __u16, CpuId, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_SINGLESTEP, kvm_dtable, kvm_guest_debug,
-    kvm_guest_debug_arch, kvm_regs, kvm_sregs,
+    __u16, CpuId, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_SINGLESTEP, Msrs, kvm_dtable, kvm_guest_debug,
+    kvm_guest_debug_arch, kvm_msr_entry, kvm_msrs, kvm_regs, kvm_sregs,
 };
 use kvm_ioctls::{VcpuExit, VcpuFd, VmFd};
 
@@ -23,6 +23,8 @@ pub enum Error {
     SetGuestDebug(kvm_ioctls::Error),
     #[error("Failed to set cpu id: {0}")]
     SetCpuID(kvm_ioctls::Error),
+    #[error("Failed to set cpu msrs: {0}")]
+    Msrs(vmm_sys_util::fam::Error),
     #[error("Error during execution: {0}")]
     Run(kvm_ioctls::Error),
 }
@@ -179,6 +181,7 @@ impl Vcpu {
         self.setup_idt(&setup.idt)?;
         self.setup_paging(setup.paging)?;
         self.setup_execution(setup.stack, setup.entry)?;
+        self.setup_cpu_features()?;
         Ok(())
     }
 
@@ -277,6 +280,25 @@ impl Vcpu {
             true
         });
 
+        Ok(())
+    }
+
+    fn setup_cpu_features(&mut self) -> Result<()> {
+        // The XCR0 mask for x87 (bit 0) + SSE (bit 1)
+        // AVX would add bit 2
+        let xcr0_mask: u64 = 0b11;
+
+        // KVM allows setting MSRs via KVM_SET_MSRS
+        // Define the XCR0 MSR
+        let msrs = Msrs::from_entries(&[kvm_msr_entry {
+            index: 0xC0000080, // IA32_XCR0
+            data: xcr0_mask,
+            ..Default::default()
+        }])
+        .map_err(Error::Msrs)?;
+
+        // Apply the MSRs to the vCPU
+        self.inner.set_msrs(&msrs).map_err(Error::SetCpuID)?;
         Ok(())
     }
 

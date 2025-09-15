@@ -46,10 +46,6 @@ pub(crate) fn cpuid(kvm: &Kvm) -> Result<CpuId> {
                 // Bit 3 = PSE (Page Size Extension)
                 // Bit 6 = PAE (Physical Address Extension)
                 entry.edx |= (1 << 3) | (1 << 6);
-
-                // ECX bits:
-                // Bit 20 = NX (No-Execute bit support)
-                entry.ecx |= 1 << 20;
             }
 
             // Extended CPUID information
@@ -57,6 +53,9 @@ pub(crate) fn cpuid(kvm: &Kvm) -> Result<CpuId> {
                 // EDX bits:
                 // Bit 29 = LM (Long Mode, 64-bit support)
                 entry.edx |= 1 << 29;
+                // ECX bits:
+                // Bit 20 = NX (No-Execute bit support)
+                entry.edx |= 1 << 20;
             }
 
             // Address size information
