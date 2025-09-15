@@ -23,8 +23,10 @@ pub enum Error {
     SetGuestDebug(kvm_ioctls::Error),
     #[error("Failed to set cpu id: {0}")]
     SetCpuID(kvm_ioctls::Error),
-    #[error("Failed to set cpu msrs: {0}")]
-    Msrs(vmm_sys_util::fam::Error),
+    #[error("Failed to get cpu XCRs: {0}")]
+    GetXcrs(kvm_ioctls::Error),
+    #[error("Failed to set cpu XCRs: {0}")]
+    SetXcrs(kvm_ioctls::Error),
     #[error("Error during execution: {0}")]
     Run(kvm_ioctls::Error),
 }
@@ -33,12 +35,15 @@ type Result<T> = core::result::Result<T, Error>;
 
 /// CR0: Protection Enabled
 const CR0_PE: u64 = 1 << 0;
+/// CR0: Monitor Coprocessor
+const CR0_MP: u64 = 1 << 1;
 /// CRO: Extention Type
 const CR0_ET: u64 = 1 << 4;
 /// CR0: Write Protect
 const CR0_WP: u64 = 1 << 16;
 /// CR0: Paging
 const CR0_PG: u64 = 1 << 31;
+const CR0_OSFXSR: u64 = 1 << 9;
 
 /// CR4: Debugging Extensions
 const CR4_DE: u64 = 0x1 << 3;
@@ -49,6 +54,10 @@ const CR4_PSE: u64 = 0x1 << 4;
 const CR4_PAE: u64 = 0x1 << 5;
 /// CR4: Page-Global Enable
 const CR4_PGE: u64 = 0x1 << 7;
+const CR4_OSFXSR: u64 = 0x1 << 1;
+const CR4_OSXSAVE: u64 = 0x1 << 18;
+
+const CR4_OSXMMEXCPT: u64 = 0x1 << 10;
 
 /// Long Mode Enabled
 const EFER_LME: u64 = 0x1 << 8;
@@ -123,6 +132,11 @@ impl Vcpu {
     pub fn read_regs(&mut self) -> Result<&kvm_regs> {
         self.refresh_regs()?;
         Ok(self.regs.get())
+    }
+
+    pub fn read_sregs(&mut self) -> Result<&kvm_sregs> {
+        self.refresh_regs()?;
+        Ok(self.sregs.get())
     }
 
     pub fn read_all_regs(&mut self) -> Result<(&kvm_regs, &kvm_sregs)> {
@@ -270,11 +284,11 @@ impl Vcpu {
 
         self.sregs.mutate(|sregs| {
             // enable protected mode and paging
-            sregs.cr0 = CR0_PE | CR0_PG | CR0_ET | CR0_WP;
+            sregs.cr0 = CR0_PE | CR0_MP | CR0_PG | CR0_ET | CR0_WP | CR0_OSFXSR;
             // set the paging address
             sregs.cr3 = addr.as_u64();
             // set Debug, and Physical-Address Extension, Page-Global Enable
-            sregs.cr4 = CR4_DE | CR4_PSE | CR4_PAE | CR4_PGE;
+            sregs.cr4 = CR4_DE | CR4_PSE | CR4_PAE | CR4_PGE | CR4_OSFXSR | CR4_OSXMMEXCPT | CR4_OSXSAVE;
             // set Long-Mode Active and Long-Mode Enabled
             sregs.efer |= EFER_LMA | EFER_LME | EFER_NX;
             true
@@ -284,22 +298,11 @@ impl Vcpu {
     }
 
     fn setup_cpu_features(&mut self) -> Result<()> {
-        // The XCR0 mask for x87 (bit 0) + SSE (bit 1)
-        // AVX would add bit 2
-        let xcr0_mask: u64 = 0b11;
+        // The XCR0 mask for x87 (bit 0) + SSE (bit 1) + YMM (bit 2)
+        let mut xcrs = self.inner.get_xcrs().map_err(Error::GetXcrs)?;
+        xcrs.xcrs[0].xcr = 0b111;
 
-        // KVM allows setting MSRs via KVM_SET_MSRS
-        // Define the XCR0 MSR
-        let msrs = Msrs::from_entries(&[kvm_msr_entry {
-            index: 0xC0000080, // IA32_XCR0
-            data: xcr0_mask,
-            ..Default::default()
-        }])
-        .map_err(Error::Msrs)?;
-
-        // Apply the MSRs to the vCPU
-        self.inner.set_msrs(&msrs).map_err(Error::SetCpuID)?;
-        Ok(())
+        self.inner.set_xcrs(&xcrs).map_err(Error::SetXcrs)
     }
 
     /// set up other execution relevant registers besides the structures required for long mode

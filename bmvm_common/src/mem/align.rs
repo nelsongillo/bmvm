@@ -81,6 +81,13 @@ impl Align for Arm64 {
 }
 
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Stack16B;
+
+impl Align for Stack16B {
+    const ALIGNMENT: u64 = 0x10;
+}
+
+#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Page4KiB;
 
 impl Align for Page4KiB {
@@ -104,6 +111,12 @@ impl Align for Page1GiB {
 pub struct Stack;
 impl Align for Stack {
     const ALIGNMENT: u64 = 16;
+}
+
+#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct StackPreCall;
+impl Align for StackPreCall {
+    const ALIGNMENT: u64 = 8;
 }
 
 #[sealed::sealed]

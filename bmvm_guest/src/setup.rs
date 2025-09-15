@@ -4,7 +4,7 @@ use bmvm_common::mem::{Align, Arena, DataAccessMode, LayoutTable, Page4KiB};
 use bmvm_common::{BMVM_MEM_LAYOUT_TABLE, mem};
 
 /// Parse the memory info structure and initialize the paging system etc.
-#[inline(always)]
+#[inline(never)]
 pub(super) fn setup() -> Result<(), ExitCode> {
     let raw_ptr = BMVM_MEM_LAYOUT_TABLE.as_u64() as *const u8;
     let raw = unsafe { core::slice::from_raw_parts(raw_ptr, Page4KiB::ALIGNMENT as usize) };

@@ -9,17 +9,13 @@ use crate::{GUEST_PAGING_ADDR, GUEST_STACK_ADDR, GUEST_SYSTEM_ADDR, Upcall};
 use bmvm_common::error::ExitCode;
 use bmvm_common::interprete::Interpret;
 use bmvm_common::mem;
-use bmvm_common::mem::{
-    Align, AlignedNonZeroU64, AlignedNonZeroUsize, DefaultAddrSpace, DefaultAlign, Flags,
-    LayoutTable, LayoutTableEntry, Page1GiB, Page2MiB, Page4KiB, PhysAddr, Stack, VirtAddr,
-    align_floor, init as init_vmi_alloc,
-};
+use bmvm_common::mem::{Align, AlignedNonZeroU64, AlignedNonZeroUsize, DefaultAddrSpace, DefaultAlign, Flags, LayoutTable, LayoutTableEntry, Page1GiB, Page2MiB, Page4KiB, PhysAddr, Stack, VirtAddr, align_floor, init as init_vmi_alloc, StackPreCall};
 use bmvm_common::registry::Params;
 use bmvm_common::vmi::{ForeignShareable, Transport};
 use bmvm_common::{BMVM_MEM_LAYOUT_TABLE, EXIT_IO_PORT, HYPERCALL_IO_PORT};
-use kvm_bindings::{KVM_API_VERSION, kvm_regs};
+use kvm_bindings::{KVM_API_VERSION, kvm_regs, kvm_sregs};
 use kvm_ioctls::{Cap, Kvm, VcpuExit, VmFd};
-use std::io::Write;
+use std::io::{stdout, Write};
 use std::num::NonZeroUsize;
 
 const INITIAL_PAGE_ALLOC: usize = 16;
@@ -268,6 +264,7 @@ impl Vm {
                     log::error!("Unexpected exit reason: {:?}", reason);
                     let _ = &self.print_debug_info()?;
                     let _ = &self.dump_region(0x1000)?;
+                    log::debug!("Register: {}", Self::print_kvm_sregs(self.vcpu.read_sregs()?));
                     return Err(Error::UnexpectedExit);
                 }
             }
@@ -303,6 +300,9 @@ impl Vm {
             // Set the function pointer
             regs.rip = upcall.ptr.as_u64();
             log::info!("Calling function '{}'", upcall.name);
+
+            // make sure the stack is rsp+8 % 16 == 0
+            regs.rsp = StackPreCall::align_floor(regs.rsp);
             true
         })?;
 
@@ -315,6 +315,12 @@ impl Vm {
     where
         R: ForeignShareable,
     {
+        // remove the (non-existing) return address from the stack
+        self.vcpu.mutate_regs(|regs| {
+            regs.rsp += 8;
+            true
+        })?;
+
         let regs = self.vcpu.read_regs()?;
         let transport = Transport::new(regs.r8, regs.r9);
         R::from_transport(transport).map_err(Error::UpcallReturn)
@@ -517,7 +523,7 @@ impl Vm {
                 entries: 0,
             },
             paging,
-            stack: (GUEST_STACK_ADDR().as_virt_addr() - 1).align_floor::<Stack>(),
+            stack: (GUEST_STACK_ADDR().as_virt_addr() - 1).align_floor::<StackPreCall>(),
             entry: entry_point,
             cpu_id: setup::cpuid(&self.kvm)?,
         };
@@ -613,6 +619,17 @@ impl Vm {
             regs.r15,
             regs.rip,
             regs.rflags,
+        )
+    }
+
+    fn print_kvm_sregs(sregs: &kvm_sregs) -> String {
+        format!(
+            "cr0=0x{:X} cr2=0x{:X} cr3=0x{:X} cr4=0x{:X} cr8=0x{:X}",
+            sregs.cr0,
+            sregs.cr2,
+            sregs.cr3,
+            sregs.cr4,
+            sregs.cr8,
         )
     }
 }

@@ -222,7 +222,7 @@ dependencies = [
  "memchr",
  "sealed",
  "spin",
- "talc 4.4.3 (git+https://github.com/nelsongillo/talc?rev=c379c755e5c2142e8a6ce970e16a5ca05e6b2234)",
+ "talc 4.4.3 (git+https://github.com/nelsongillo/talc?rev=c5ae112fc7c17026c7b6edf22325602d57a836b9)",
  "thiserror 2.0.16",
 ]
 
@@ -1770,7 +1770,7 @@ dependencies = [
 [[package]]
 name = "talc"
 version = "4.4.3"
-source = "git+https://github.com/nelsongillo/talc?rev=c379c755e5c2142e8a6ce970e16a5ca05e6b2234#c379c755e5c2142e8a6ce970e16a5ca05e6b2234"
+source = "git+https://github.com/nelsongillo/talc?rev=c5ae112fc7c17026c7b6edf22325602d57a836b9#c5ae112fc7c17026c7b6edf22325602d57a836b9"
 dependencies = [
  "lock_api",
 ]

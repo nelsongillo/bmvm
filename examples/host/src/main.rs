@@ -45,7 +45,9 @@ fn main() -> anyhow::Result<()> {
         .configure_vm(vm)
         .build()?;
 
-    let run = module.get_upcall::<(), ()>("run").unwrap();
+    let run = module
+        .get_upcall::<(), ()>("run")
+        .unwrap();
 
     let now = std::time::Instant::now();
     run.call(&mut module, ()).unwrap();

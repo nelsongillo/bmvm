@@ -41,22 +41,24 @@ pub(crate) fn cpuid(kvm: &Kvm) -> Result<CpuId> {
     for entry in cpuid.as_mut_slice().iter_mut() {
         match entry.function {
             // Basic CPUID information
-            0x00000001 => {
-                // EDX bits:
-                // Bit 3 = PSE (Page Size Extension)
-                // Bit 6 = PAE (Physical Address Extension)
-                entry.edx |= (1 << 3) | (1 << 6);
-            }
 
-            // Extended CPUID information
-            EXT_PROCESSOR_INFO_EAX => {
-                // EDX bits:
-                // Bit 29 = LM (Long Mode, 64-bit support)
-                entry.edx |= 1 << 29;
-                // ECX bits:
-                // Bit 20 = NX (No-Execute bit support)
-                entry.edx |= 1 << 20;
-            }
+0x00000001 => {
+    println!("{}", entry.edx);
+     println!("{}", entry.ecx);
+// EDX bits:
+// Bit 3 = PSE (Page Size Extension)
+// Bit 6 = PAE (Physical Address Extension)
+entry.edx |= (1 << 3) | (1 << 6) |  (1 << 25) | (1 << 26);
+}
+
+// Extended CPUID information
+EXT_PROCESSOR_INFO_EAX => {
+// EDX bits:
+// Bit 29 = LM (Long Mode, 64-bit support)
+entry.edx |= 1 << 29;
+// Bit 20 = NX (No-Execute bit support)
+entry.edx |= 1 << 20;
+}
 
             // Address size information
             EXT_PROCESSOR_INFO_INDEX => {

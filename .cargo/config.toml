@@ -1,7 +1,7 @@
-[target.x86_64-unknown-none]
-rustflags = [
-    "-C", "link-arg=-Tlayout.x",
-    "-C", "relocation-model=static",
-    "-C", "target-cpu=native",
-    "-C", "target-feature=-soft-float",
-]
+# [unstable]
+# build-std = ["core", "alloc", "compiler_builtins"]
+# build-std-features = ["compiler-builtins-mem"]
+#
+# [build]
+# target = "./x86_64-unknown-bmvm.json"
+# rustflags = "-Clink-arg=-Tlayout.x -Crelocation-model=static"

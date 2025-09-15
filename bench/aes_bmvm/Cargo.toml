@@ -4,7 +4,6 @@ cargo-features = ["per-package-target"]
 name = "aes-bmvm"
 version = "0.1.0"
 edition = "2024"
-forced-target = "x86_64-unknown-none"
 
 
 [dependencies]

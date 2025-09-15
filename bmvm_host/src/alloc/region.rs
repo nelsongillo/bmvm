@@ -180,6 +180,26 @@ impl RegionCollection {
 
         Ok(())
     }
+
+    pub fn print(&self, start: PhysAddr, size: usize) -> Result<()> {
+        let mut current = start;
+        let mut requested = size;
+        while requested > 0 {
+            let reg = self.get(start).ok_or(Error::RegionNotFound(current))?;
+            let slice = reg.as_ref().ok_or(Error::NotReadable(current))?;
+            let dump = if slice.len() > requested {
+                &slice[..requested]
+            } else {
+                slice
+            };
+
+            println!("{:x?}", dump);
+            requested -= dump.len();
+            current += dump.len() as u64;
+        }
+
+        Ok(())
+    }
 }
 
 impl IntoIterator for RegionCollection {
