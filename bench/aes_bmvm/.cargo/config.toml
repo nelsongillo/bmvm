@@ -1,0 +1,2 @@
+[build]
+rustflags = ["-C", "target-feature=+aes,+avx2,+pclmulqdq,+hard-float,-soft-float"]

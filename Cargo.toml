@@ -20,4 +20,6 @@ members = [
     # Benchmark Guests
     "bench/bmvm_echo",
     "bench/wasm_echo",
+    "bench/aes_bmvm",
+    "bench/aes_wasm",
 ]

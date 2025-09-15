@@ -347,6 +347,13 @@ impl<T: TypeSignature> AsMut<T> for Owned<T> {
     }
 }
 
+impl<T: TypeSignature> Drop for Owned<T> {
+    fn drop(&mut self) {
+        let alloc = ALLOC.get().unwrap();
+        alloc.dealloc(self.inner);
+    }
+}
+
 #[repr(transparent)]
 pub struct Shared<T: TypeSignature> {
     pub(crate) inner: OffsetPtr<T>,
@@ -373,6 +380,10 @@ pub struct OwnedBuf {
 impl OwnedBuf {
     fn new(ptr: NonNull<u8>, capacity: NonZeroUsize) -> Self {
         Self { ptr, capacity }
+    }
+
+    pub fn len(&self) -> usize {
+        self.capacity.get()
     }
 
     pub fn into_shared(self) -> SharedBuf {
@@ -430,6 +441,13 @@ impl<T: TypeSignature> Foreign<T> {
         let alloc = ALLOC.get().unwrap();
         alloc.get(&self.ptr)
     }
+
+    /// Own the pointer
+    pub fn owned(self) -> Owned<T> {
+        let alloc = ALLOC.get().unwrap();
+        let ptr = alloc.get_non_null(&self.ptr);
+        Owned { inner: ptr }
+    }
 }
 
 impl<T: Unpackable> Foreign<T> {
@@ -480,6 +498,16 @@ pub struct ForeignBuf {
 impl ForeignBuf {
     pub fn len(&self) -> usize {
         self.capacity.get()
+    }
+
+    /// Own the pointer
+    pub fn owned(self) -> OwnedBuf {
+        let alloc = ALLOC.get().unwrap();
+        let ptr = alloc.get_non_null(&self.ptr);
+        OwnedBuf {
+            ptr,
+            capacity: self.capacity,
+        }
     }
 }
 
