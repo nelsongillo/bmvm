@@ -99,6 +99,8 @@ impl Vm {
             return Err(Error::KvmApiVersionMismatch(version));
         }
 
+        log::warn!("CAP_XSAVE: {}", kvm.check_extension(Cap::Xsave));
+
         // Check KVM_CAP_USER_MEMORY is available (needed
         if !kvm.check_extension(Cap::UserMemory) {
             return Err(Error::KvmMissingCapability(Cap::UserMemory));
@@ -264,6 +266,8 @@ impl Vm {
                     log::error!("Unexpected exit reason: {:?}", reason);
                     let _ = &self.print_debug_info()?;
                     let _ = &self.dump_region(0x1000)?;
+                    let _ = &self.dump_paging()?;
+                    log::debug!("FPU: {:?}", self.vcpu.get_fpu()?);
                     log::debug!("Register: {}", Self::print_kvm_sregs(self.vcpu.read_sregs()?));
                     return Err(Error::UnexpectedExit);
                 }

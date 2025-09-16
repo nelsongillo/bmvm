@@ -1,10 +1,10 @@
+use std::hash::Hasher;
+use std::mem;
+use std::mem::zeroed;
 use crate::utils::Dirty;
 use crate::vm::setup::{GDT_BASE, GDT_ENTRY_SIZE, GDT_LIMIT, IDT_ENTRY_SIZE};
 use bmvm_common::mem::{PhysAddr, VirtAddr};
-use kvm_bindings::{
-    __u16, CpuId, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_SINGLESTEP, Msrs, kvm_dtable, kvm_guest_debug,
-    kvm_guest_debug_arch, kvm_msr_entry, kvm_msrs, kvm_regs, kvm_sregs,
-};
+use kvm_bindings::{__u16, CpuId, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_SINGLESTEP, Msrs, kvm_dtable, kvm_guest_debug, kvm_guest_debug_arch, kvm_msr_entry, kvm_msrs, kvm_regs, kvm_sregs, kvm_fpu, kvm_xsave};
 use kvm_ioctls::{VcpuExit, VcpuFd, VmFd};
 
 #[derive(Debug, thiserror::Error)]
@@ -27,6 +27,10 @@ pub enum Error {
     GetXcrs(kvm_ioctls::Error),
     #[error("Failed to set cpu XCRs: {0}")]
     SetXcrs(kvm_ioctls::Error),
+    #[error("Failed to get FPU: {0}")]
+    GetFpu(kvm_ioctls::Error),
+    #[error("Failed to set FPU: {0}")]
+    SetFpu(kvm_ioctls::Error),
     #[error("Error during execution: {0}")]
     Run(kvm_ioctls::Error),
 }
@@ -39,6 +43,7 @@ const CR0_PE: u64 = 1 << 0;
 const CR0_MP: u64 = 1 << 1;
 /// CRO: Extention Type
 const CR0_ET: u64 = 1 << 4;
+const CR0_NE: u64 = 1 << 5;
 /// CR0: Write Protect
 const CR0_WP: u64 = 1 << 16;
 /// CR0: Paging
@@ -139,6 +144,11 @@ impl Vcpu {
         Ok(self.sregs.get())
     }
 
+    pub fn get_fpu(&mut self) -> Result<kvm_fpu> {
+        let fpu = self.inner.get_fpu().map_err(Error::GetFpu)?;
+        Ok(fpu)
+    }
+
     pub fn read_all_regs(&mut self) -> Result<(&kvm_regs, &kvm_sregs)> {
         self.refresh_regs()?;
         Ok((self.regs.get(), self.sregs.get()))
@@ -196,6 +206,7 @@ impl Vcpu {
         self.setup_paging(setup.paging)?;
         self.setup_execution(setup.stack, setup.entry)?;
         self.setup_cpu_features()?;
+        self.setup_fpu()?;
         Ok(())
     }
 
@@ -284,11 +295,11 @@ impl Vcpu {
 
         self.sregs.mutate(|sregs| {
             // enable protected mode and paging
-            sregs.cr0 = CR0_PE | CR0_MP | CR0_PG | CR0_ET | CR0_WP | CR0_OSFXSR;
+            sregs.cr0 = CR0_PE | CR0_MP | CR0_PG | CR0_ET | CR0_WP | CR0_OSFXSR | CR0_NE;
             // set the paging address
             sregs.cr3 = addr.as_u64();
             // set Debug, and Physical-Address Extension, Page-Global Enable
-            sregs.cr4 = CR4_DE | CR4_PSE | CR4_PAE | CR4_PGE | CR4_OSFXSR | CR4_OSXMMEXCPT | CR4_OSXSAVE;
+            sregs.cr4 = CR4_DE | CR4_PSE | CR4_PAE | CR4_PGE | CR4_OSFXSR | CR4_OSXMMEXCPT;
             // set Long-Mode Active and Long-Mode Enabled
             sregs.efer |= EFER_LMA | EFER_LME | EFER_NX;
             true
@@ -298,11 +309,37 @@ impl Vcpu {
     }
 
     fn setup_cpu_features(&mut self) -> Result<()> {
-        // The XCR0 mask for x87 (bit 0) + SSE (bit 1) + YMM (bit 2)
-        let mut xcrs = self.inner.get_xcrs().map_err(Error::GetXcrs)?;
-        xcrs.xcrs[0].xcr = 0b111;
+        // The XCR0 mask for x87 (bit 0) + SSE (bit 1)
+        let xcrs = kvm_bindings::kvm_xcrs {
+            nr_xcrs: 1,
+            flags: 0,
+            xcrs: [kvm_bindings::kvm_xcr {
+                xcr: 0, // XCR0
+                reserved: 0,
+                value: 0b011, // enable x87 (bit 0), SSE (bit 1), not AVX (bit 2)
+            }; 16],
+            padding: [0u64; 16],
+        };
 
-        self.inner.set_xcrs(&xcrs).map_err(Error::SetXcrs)
+        self.inner.set_xcrs(&xcrs).map_err(Error::SetXcrs)?;
+        Ok(())
+    }
+
+    fn setup_fpu(&mut self) -> Result<()> {
+        let fpu: kvm_fpu = kvm_fpu {
+            fcw: 0x37f,
+            mxcsr: 0x1f80,
+            ..Default::default()
+        };
+        self.inner.set_fpu(&fpu).map_err(Error::SetFpu)?;
+
+        let mut xsave = self.inner.get_xsave().unwrap();
+        let fxsave_offset = 0; // start of region
+        let mxcsr_offset_bytes = fxsave_offset + 0x18;
+        let mxcsr_offset_u32 = mxcsr_offset_bytes / size_of::<u32>();
+        xsave.region[mxcsr_offset_u32] = 0x1F80;
+
+        unsafe {self.inner.set_xsave(&xsave).map_err(Error::SetFpu)}
     }
 
     /// set up other execution relevant registers besides the structures required for long mode
