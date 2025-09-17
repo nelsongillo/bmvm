@@ -48,7 +48,6 @@ const CR0_NE: u64 = 1 << 5;
 const CR0_WP: u64 = 1 << 16;
 /// CR0: Paging
 const CR0_PG: u64 = 1 << 31;
-const CR0_OSFXSR: u64 = 1 << 9;
 
 /// CR4: Debugging Extensions
 const CR4_DE: u64 = 0x1 << 3;
@@ -295,11 +294,11 @@ impl Vcpu {
 
         self.sregs.mutate(|sregs| {
             // enable protected mode and paging
-            sregs.cr0 = CR0_PE | CR0_MP | CR0_PG | CR0_ET | CR0_WP | CR0_OSFXSR | CR0_NE;
+            sregs.cr0 = CR0_PE | CR0_MP | CR0_PG | CR0_ET | CR0_WP | CR0_NE;
             // set the paging address
             sregs.cr3 = addr.as_u64();
             // set Debug, and Physical-Address Extension, Page-Global Enable
-            sregs.cr4 = CR4_DE | CR4_PSE | CR4_PAE | CR4_PGE | CR4_OSFXSR | CR4_OSXMMEXCPT;
+            sregs.cr4 = CR4_DE | CR4_PSE | CR4_PAE | CR4_PGE | CR4_OSFXSR | CR4_OSXMMEXCPT | CR4_OSXSAVE;
             // set Long-Mode Active and Long-Mode Enabled
             sregs.efer |= EFER_LMA | EFER_LME | EFER_NX;
             true
