@@ -1,15 +1,17 @@
 #![no_std]
 #![no_main]
 
-use bmvm_guest::expose;
-use bmvm_guest::host;
+use bmvm_guest::*;
 
-#[host]
-unsafe extern "C" {
-    fn add(a: u64, b: u64) -> u64;
+#[derive(TypeSignature)]
+#[repr(C)]
+struct Foo {
+    a: u32,
+    b: bool,
+    c: f64,
 }
 
 #[expose]
-fn hypercall_redirect() -> u64 {
-    add(10, 20)
+fn bar(_foo: Foreign<Foo>) -> bool {
+    true
 }
