@@ -1,6 +1,6 @@
-use bmvm_common::EXIT_IO_PORT;
 use bmvm_common::error::ExitCode;
 use bmvm_common::mem::VirtAddr;
+use bmvm_common::EXIT_IO_PORT;
 use core::arch::asm;
 use core::panic::PanicInfo;
 
@@ -21,6 +21,8 @@ pub fn exit_with_code(code: ExitCode) -> ! {
             options(nomem, nostack, preserves_flags, noreturn),
         )
     }
+
+    loop {}
 }
 
 /// Trigger VM exit with the provided exit code.
@@ -44,6 +46,7 @@ fn write_additional_values(code: &ExitCode) {
             ExitCode::UnknownUpcall(sig) => asm!("mov rbx, {}", in(reg) sig),
             ExitCode::Unmapped(c) => asm!("mov bl, {}", in(reg_byte) *c),
             ExitCode::Panic(addr) => asm!("mov rbx, {}", in(reg) addr.as_u64()),
+            ExitCode::Interrupt(i) => asm!("mov rbx, {}", in(reg) *i as u64),
             _ => {}
         }
     }

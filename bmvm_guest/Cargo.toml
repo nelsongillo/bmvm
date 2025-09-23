@@ -11,3 +11,6 @@ vmi-no-debug = ["bmvm-macros/vmi-no-debug", "bmvm-common/vmi-no-debug"]
 [dependencies]
 bmvm-macros = { path = "../bmvm_macros", default-features = false, features = ["guest"] }
 bmvm-common = { path = "../bmvm_common", default-features = false, features = ["vmi-execute"]}
+x86_64 = "0.15.2"
+lazy_static = {version = "1.5", features = ["spin_no_std"]}
+raw-cpuid = "11.6.0"

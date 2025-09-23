@@ -74,6 +74,9 @@ pub enum ExitCode {
     /// The given exit code is not mapped to an enum variant.
     #[cfg_attr(feature = "vmi-consume", error("Unmapped exit code: {0}"))]
     Unmapped(u8),
+    /// Guest Interrupt Handler triggered
+    #[cfg_attr(feature = "vmi-consume", error("Guest Interrupt: {0}"))]
+    Interrupt(u8),
 }
 
 impl ExitCode {
@@ -94,6 +97,7 @@ impl ExitCode {
             ExitCode::PageAlreadyMapped => 12,
             ExitCode::UnknownUpcall(_) => 13,
             ExitCode::ZeroCapacity => 14,
+            ExitCode::Interrupt(_) => 15,
             ExitCode::Panic(_) => 254,
             ExitCode::Unmapped(value) => value,
         }
@@ -110,6 +114,9 @@ impl ExitCode {
                 ExitCode::Unmapped(code) => core::arch::asm!("mov bl, {}", in(reg_byte) code),
                 ExitCode::Ptr(ptr) => core::arch::asm!("mov ebx, {0:e}", in(reg) ptr.as_u32()),
                 ExitCode::Panic(addr) => core::arch::asm!("mov rbx, {0}", in(reg) addr.as_u64()),
+                ExitCode::Interrupt(index) => {
+                    core::arch::asm!("mov rbx, {0}", in(reg) index as u64)
+                }
                 _ => {}
             }
         }
@@ -133,6 +140,7 @@ impl ExitCode {
                 let addr: VirtAddr = VirtAddr::new(regs.rbx);
                 ExitCode::Panic(addr)
             }
+            ExitCode::Interrupt(_) => ExitCode::Interrupt(regs.rbx as u8),
             ExitCode::Unmapped(_) => {
                 let code: u8 = (regs.rbx & 0xFF) as u8;
                 ExitCode::Unmapped(code)
@@ -160,6 +168,7 @@ impl From<u8> for ExitCode {
             12 => ExitCode::PageAlreadyMapped,
             13 => ExitCode::UnknownUpcall(Signature::from(value)),
             14 => ExitCode::ZeroCapacity,
+            15 => ExitCode::Interrupt(0),
             254 => ExitCode::Panic(VirtAddr::new_unchecked(value as u64)),
             v => ExitCode::Unmapped(v),
         }
@@ -184,6 +193,7 @@ impl From<ExitCode> for u8 {
             ExitCode::PageAlreadyMapped => 12,
             ExitCode::UnknownUpcall(_) => 13,
             ExitCode::ZeroCapacity => 14,
+            ExitCode::Interrupt(_) => 15,
             ExitCode::Panic(_) => 254,
             ExitCode::Unmapped(value) => value,
         }

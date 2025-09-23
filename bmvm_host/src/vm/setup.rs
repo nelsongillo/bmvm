@@ -7,7 +7,7 @@ use kvm_ioctls::Kvm;
 pub(super) const IDT_SIZE: u64 = 0x1000;
 pub(super) const GDT_SIZE: u64 = 0x1000;
 pub(super) const GDT_ENTRY_SIZE: usize = 8;
-pub(super) const IDT_ENTRY_SIZE: usize = 8;
+pub(super) const IDT_ENTRY_SIZE: usize = 16;
 pub const IDT_PAGE_REQUIRED: usize = (align_ceil(IDT_SIZE) / DefaultAlign::ALIGNMENT) as usize;
 pub const GDT_PAGE_REQUIRED: usize = (align_ceil(GDT_SIZE) / DefaultAlign::ALIGNMENT) as usize;
 
@@ -46,13 +46,13 @@ pub(crate) fn cpuid(kvm: &Kvm) -> Result<CpuId> {
                 // Bit 3 = PSE (Page Size Extension)
                 // Bit 6 = PAE (Physical Address Extension)
                 // Bit 25 = SSE
-                // Bit 26 = SSE2 
+                // Bit 26 = SSE2
                 entry.edx |= (1 << 3) | (1 << 6) | (1 << 25) | (1 << 26);
                 // ECX bits:
                 // Bit 0 = SSE3
                 // Bit 9 = SSSE3
                 // Bit 19 = SSE4_1
-                // Bit 20 = SSE4_2 
+                // Bit 20 = SSE4_2
                 // Bit 26 = XSAVE
                 entry.ecx |= (1 << 0) | (1 << 9) | (1 << 19) | (1 << 20) | (1 << 26);
             }

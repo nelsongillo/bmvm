@@ -9,16 +9,20 @@ use crate::{GUEST_PAGING_ADDR, GUEST_STACK_ADDR, GUEST_SYSTEM_ADDR, Upcall};
 use bmvm_common::error::ExitCode;
 use bmvm_common::interprete::Interpret;
 use bmvm_common::mem;
-use bmvm_common::mem::{Align, AlignedNonZeroU64, AlignedNonZeroUsize, DefaultAddrSpace, DefaultAlign, Flags, LayoutTable, LayoutTableEntry, Page1GiB, Page2MiB, Page4KiB, PhysAddr, Stack, VirtAddr, align_floor, init as init_vmi_alloc, StackPreCall};
+use bmvm_common::mem::{
+    Align, AlignedNonZeroU64, AlignedNonZeroUsize, DefaultAddrSpace, DefaultAlign, Flags,
+    LayoutTable, LayoutTableEntry, Page1GiB, Page2MiB, Page4KiB, PhysAddr, Stack, StackPreCall,
+    VirtAddr, align_floor, init as init_vmi_alloc,
+};
 use bmvm_common::registry::Params;
 use bmvm_common::vmi::{ForeignShareable, Transport};
 use bmvm_common::{BMVM_MEM_LAYOUT_TABLE, EXIT_IO_PORT, HYPERCALL_IO_PORT};
 use kvm_bindings::{KVM_API_VERSION, kvm_regs, kvm_sregs};
 use kvm_ioctls::{Cap, Kvm, VcpuExit, VmFd};
-use std::io::{stdout, Write};
+use std::io::{Write, stdout};
 use std::num::NonZeroUsize;
 
-const INITIAL_PAGE_ALLOC: usize = 16;
+const INITIAL_PAGE_ALLOC: usize = 32;
 const ADDITIONAL_PAGE_ALLOC: usize = 4;
 
 const SYS_REGION_OFFSET_GDT: u64 = 0;
@@ -132,7 +136,8 @@ impl Vm {
     /// load the guest executable
     pub(crate) fn load_exec(&mut self, exec: &mut ExecBundle) -> Result<()> {
         // allocate a stack region
-        let (stack, stack_entry) = self.alloc_stack(self.cfg.stack_size, GUEST_STACK_ADDR())?;
+        let (stack, stack_entry, stack_ptr) =
+            self.alloc_stack(self.cfg.stack_size, GUEST_STACK_ADDR())?;
         let stack_addr = stack.addr();
         self.mem_mappings.push(stack);
         exec.layout.push(stack_entry);
@@ -156,7 +161,7 @@ impl Vm {
         self.mem_mappings.append(&mut exec.mem_regions);
 
         // setup the vcpu for execution
-        self.setup_cpu(exec.entry.as_virt_addr(), gdt, idt, paging)?;
+        self.setup_cpu(exec.entry.as_virt_addr(), gdt, idt, paging, stack_ptr)?;
 
         // map all regions to the guest
         for (slot, r) in self.mem_mappings.iter_mut().enumerate() {
@@ -240,6 +245,20 @@ impl Vm {
                                     }
                                     return Err(Error::UnexpectedExit);
                                 },
+                                ExitCode::Interrupt(i) => {
+                                    if let ExitCode::Interrupt(i) =
+                                        exit_code.read_values(self.vcpu.read_regs().unwrap())
+                                    {
+                                        log::error!("Interrupt: {}", i);
+                                        let _ = &self.print_debug_info()?;
+                                        log::debug!(
+                                            "Register: {}",
+                                            Self::print_kvm_sregs(self.vcpu.read_sregs()?)
+                                        );
+                                        let sregs = self.vcpu.read_sregs()?;
+                                    }
+                                    return Err(Error::UnexpectedExit);
+                                }
                                 _ => {
                                     log::error!("Exit Code: {:?}", exit_code);
                                     return Err(Error::UnhandledHalt(exit_code));
@@ -268,7 +287,10 @@ impl Vm {
                     let _ = &self.dump_region(0x1000)?;
                     let _ = &self.dump_paging()?;
                     log::debug!("FPU: {:?}", self.vcpu.get_fpu()?);
-                    log::debug!("Register: {}", Self::print_kvm_sregs(self.vcpu.read_sregs()?));
+                    log::debug!(
+                        "Register: {}",
+                        Self::print_kvm_sregs(self.vcpu.read_sregs()?)
+                    );
                     return Err(Error::UnexpectedExit);
                 }
             }
@@ -378,26 +400,36 @@ impl Vm {
         &mut self,
         capacity: AlignedNonZeroUsize,
         base: PhysAddr,
-    ) -> Result<(Region<ReadWrite>, LayoutTableEntry)> {
+    ) -> Result<(Region<ReadWrite>, LayoutTableEntry, VirtAddr)> {
         let region = self
             .manager
             .alloc::<ReadWrite>(capacity)
             .map_err(Error::Allocator)?;
 
-        // stack grows downwards -> mount address is at the top of the stack
-        let guest_addr = align_floor((base - capacity.get() as u64).as_u64());
-        let phys_addr = PhysAddr::new(guest_addr);
-        let stack = region.set_guest_addr(phys_addr);
+        let addr_base = Self::align_by_ref(
+            base.as_virt_addr().as_u64() - capacity.get() as u64,
+            region.as_ptr() as u64,
+        );
+
+        //
+        let addr = PhysAddr::new(addr_base.get());
+        let stack = region.set_guest_addr(addr);
+        let host_vaddr = stack.as_ptr() as u64;
+        let host_v2 = VirtAddr::new_truncate(host_vaddr);
 
         let size = (capacity.get() as u64 / DefaultAlign::ALIGNMENT) as u32;
         let entry = LayoutTableEntry::new(
-            phys_addr,
-            phys_addr.as_virt_addr(),
+            addr,
+            host_v2,
             size,
             Flags::PRESENT | Flags::DATA_WRITE | Flags::STACK,
         );
 
-        Ok((stack, entry))
+        Ok((
+            stack,
+            entry,
+            (host_v2 + capacity.get() as u64).align_floor::<StackPreCall>(),
+        ))
     }
 
     /// allocate shared memory managed
@@ -514,6 +546,7 @@ impl Vm {
         gdt: PhysAddr,
         idt: PhysAddr,
         paging: PhysAddr,
+        stack_ptr: VirtAddr,
     ) -> Result<()> {
         let setup = vcpu::Setup {
             gdt: vcpu::Gdt {
@@ -527,7 +560,7 @@ impl Vm {
                 entries: 0,
             },
             paging,
-            stack: (GUEST_STACK_ADDR().as_virt_addr() - 1).align_floor::<StackPreCall>(),
+            stack: stack_ptr,
             entry: entry_point,
             cpu_id: setup::cpuid(&self.kvm)?,
         };
@@ -629,11 +662,7 @@ impl Vm {
     fn print_kvm_sregs(sregs: &kvm_sregs) -> String {
         format!(
             "cr0=0x{:X} cr2=0x{:X} cr3=0x{:X} cr4=0x{:X} cr8=0x{:X}",
-            sregs.cr0,
-            sregs.cr2,
-            sregs.cr3,
-            sregs.cr4,
-            sregs.cr8,
+            sregs.cr0, sregs.cr2, sregs.cr3, sregs.cr4, sregs.cr8,
         )
     }
 }

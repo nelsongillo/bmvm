@@ -13,7 +13,7 @@ fn phys_address_bits() -> u8 {
     INIT.call_once(|| {
         let result = unsafe { __cpuid(ADDR_SPACE_FUNC) };
         let phys = (result.eax & 0xFF) as u8;
-        let guest = ((result.eax >> 16) & 0xFF) as u8;
+        let guest = ((result.eax >> 8) & 0xFF) as u8;
         BITS.store(
             if guest != 0 { min(guest, phys) } else { phys },
             Ordering::Relaxed,

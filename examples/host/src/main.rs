@@ -24,7 +24,7 @@ fn main() -> anyhow::Result<()> {
     let mut log_builder = env_logger::Builder::from_default_env();
     match args.debug {
         true => log_builder.filter_level(log::LevelFilter::Debug),
-        false => log_builder.filter_level(log::LevelFilter::Info),
+        false => log_builder.filter_level(log::LevelFilter::Debug),
     }
     .init();
 
@@ -45,9 +45,7 @@ fn main() -> anyhow::Result<()> {
         .configure_vm(vm)
         .build()?;
 
-    let run = module
-        .get_upcall::<(), ()>("run")
-        .unwrap();
+    let run = module.get_upcall::<(), ()>("run").unwrap();
 
     let now = std::time::Instant::now();
     run.call(&mut module, ()).unwrap();

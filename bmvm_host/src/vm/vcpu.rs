@@ -1,11 +1,14 @@
-use std::hash::Hasher;
-use std::mem;
-use std::mem::zeroed;
 use crate::utils::Dirty;
 use crate::vm::setup::{GDT_BASE, GDT_ENTRY_SIZE, GDT_LIMIT, IDT_ENTRY_SIZE};
 use bmvm_common::mem::{PhysAddr, VirtAddr};
-use kvm_bindings::{__u16, CpuId, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_SINGLESTEP, Msrs, kvm_dtable, kvm_guest_debug, kvm_guest_debug_arch, kvm_msr_entry, kvm_msrs, kvm_regs, kvm_sregs, kvm_fpu, kvm_xsave};
+use kvm_bindings::{
+    __u16, CpuId, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_SINGLESTEP, Msrs, kvm_dtable, kvm_fpu,
+    kvm_guest_debug, kvm_guest_debug_arch, kvm_msr_entry, kvm_msrs, kvm_regs, kvm_sregs, kvm_xsave,
+};
 use kvm_ioctls::{VcpuExit, VcpuFd, VmFd};
+use std::hash::Hasher;
+use std::mem;
+use std::mem::zeroed;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -58,7 +61,7 @@ const CR4_PSE: u64 = 0x1 << 4;
 const CR4_PAE: u64 = 0x1 << 5;
 /// CR4: Page-Global Enable
 const CR4_PGE: u64 = 0x1 << 7;
-const CR4_OSFXSR: u64 = 0x1 << 1;
+const CR4_OSFXSR: u64 = 0x1 << 9;
 const CR4_OSXSAVE: u64 = 0x1 << 18;
 
 const CR4_OSXMMEXCPT: u64 = 0x1 << 10;
@@ -220,7 +223,7 @@ impl Vcpu {
 
         self.sregs.mutate(|sregs| {
             sregs.gdt = kvm_dtable {
-                base: gdt.addr.as_u64(),
+                base: gdt.addr.as_virt_addr().as_u64(),
                 limit: (gdt.entries * GDT_ENTRY_SIZE) as __u16 - 1,
                 padding: [0; 3usize],
             };
@@ -298,7 +301,8 @@ impl Vcpu {
             // set the paging address
             sregs.cr3 = addr.as_u64();
             // set Debug, and Physical-Address Extension, Page-Global Enable
-            sregs.cr4 = CR4_DE | CR4_PSE | CR4_PAE | CR4_PGE | CR4_OSFXSR | CR4_OSXMMEXCPT | CR4_OSXSAVE;
+            sregs.cr4 =
+                CR4_DE | CR4_PSE | CR4_PAE | CR4_PGE | CR4_OSFXSR | CR4_OSXMMEXCPT | CR4_OSXSAVE;
             // set Long-Mode Active and Long-Mode Enabled
             sregs.efer |= EFER_LMA | EFER_LME | EFER_NX;
             true
@@ -338,7 +342,7 @@ impl Vcpu {
         let mxcsr_offset_u32 = mxcsr_offset_bytes / size_of::<u32>();
         xsave.region[mxcsr_offset_u32] = 0x1F80;
 
-        unsafe {self.inner.set_xsave(&xsave).map_err(Error::SetFpu)}
+        unsafe { self.inner.set_xsave(&xsave).map_err(Error::SetFpu) }
     }
 
     /// set up other execution relevant registers besides the structures required for long mode
