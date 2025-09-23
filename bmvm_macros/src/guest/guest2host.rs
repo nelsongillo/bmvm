@@ -7,7 +7,7 @@ use crate::guest::{ParamType, VAR_NAME_PARAM, gen_call_meta_debug, make_type_tur
 use bmvm_common::BMVM_META_SECTION_HOST;
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span, TokenStream as TS};
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::Error;
 use syn::spanned::Spanned;
 use syn::{ForeignItem, ItemForeignMod, parse_macro_input};
@@ -126,7 +126,7 @@ pub fn host_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
     });
 
     // optional one time debug segment for the whole block
-    let debug = gen_call_meta_debug(&Ident::new(suffix().as_str(), Span::call_site()));
+    let debug = gen_call_meta_debug(&format_ident!("dummy_function_{}", suffix()));
     // Combine all the stubs and generate the final output
     let expanded = quote! {
         #debug
