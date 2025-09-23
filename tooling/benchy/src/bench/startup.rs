@@ -39,7 +39,7 @@ pub fn wasm(path: &PathBuf, warmup: usize, iters: usize) -> anyhow::Result<Vec<f
             let mut linker = Linker::new(&engine);
 
             #[cfg(feature = "links1")]
-            linker.func_wrap("env", "hyper1", || 0i32);
+            linker.func_wrap("env", "hyper0", || 0i32);
 
             #[cfg(feature = "links8")]
             loop_code::repeat!(INDEX 8 {
