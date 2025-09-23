@@ -10,7 +10,6 @@ members = [
     "examples/guest",
     "examples/host",
     "examples/host-bench",
-    "examples/host-cpuid",
     "examples/wasm",
     "examples/ctx",
     # Debug Tooling
