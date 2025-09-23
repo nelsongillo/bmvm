@@ -70,7 +70,7 @@ pub fn wasm(path: &PathBuf, warmup: usize, iters: usize) -> anyhow::Result<Vec<f
 
             #[cfg(feature = "links1")]
             {
-                calls.push(instance.get_typed_func::<(), i32>(&mut store, formatcp!("up{}", 1))?);
+                calls.push(instance.get_typed_func::<(), i32>(&mut store, "up0")?);
             }
 
             #[cfg(feature = "links8")]
@@ -122,7 +122,7 @@ pub fn bmvm(path: &PathBuf, warmup: usize, iters: usize) -> anyhow::Result<Vec<f
         let mut linker = linker::ConfigBuilder::new();
         #[cfg(feature = "links1")]
         {
-            linker = linker.register_guest_function::<(), i32>("up1");
+            linker = linker.register_guest_function::<(), i32>("up0");
         }
 
         #[cfg(feature = "links8")]
@@ -164,7 +164,7 @@ pub fn bmvm(path: &PathBuf, warmup: usize, iters: usize) -> anyhow::Result<Vec<f
 
         #[cfg(feature = "links1")]
         {
-            calls.push(module.get_upcall::<(), i32>(formatcp!("up{}", 1))?);
+            calls.push(module.get_upcall::<(), i32>("up0")?);
         }
 
         #[cfg(feature = "links8")]
