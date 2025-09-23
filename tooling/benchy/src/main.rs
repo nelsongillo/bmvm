@@ -112,9 +112,7 @@ fn main() -> anyhow::Result<()> {
 
     output.push(args.mode.dir());
     output.push(args.runtime.dir());
-    if args.mode != Mode::Start {
-        output.push(args.file.file_stem().unwrap());
-    }
+    output.push(args.file.file_stem().unwrap());
 
     eval::eval(output, &results)
 }

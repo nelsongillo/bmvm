@@ -10,7 +10,9 @@ members = [
     "examples/guest",
     "examples/host",
     "examples/host-bench",
+    "examples/host-cpuid",
     "examples/wasm",
+    "examples/ctx",
     # Debug Tooling
     "tooling/printlayout",
     "tooling/vmi-inspect",
@@ -22,4 +24,6 @@ members = [
     "bench/wasm_echo",
     "bench/aes_bmvm",
     "bench/aes_wasm",
+    "bench/link-bmvm",
+    "bench/link-wasm",
 ]

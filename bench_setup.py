@@ -74,11 +74,21 @@ def build_project(name, project, output, target, feature=None, build_target=None
         return
 
     if "wasm" in build_target:
-        name = name + ".wasm"
+        src_name = name + ".wasm"
+        if feature:
+            dst_name = f"{name}-{feature}.wasm"
+        else:
+            dst_name = f"{name}.wasm"
+    else:
+        src_name = name
+        if feature:
+            dst_name = f"{name}-{feature}"
+        else:
+            dst_name = name
 
     # copy the binary to the output directory
-    src = target_dir / name
-    dst = output / name
+    src = target_dir / src_name
+    dst = output / dst_name
     if dst.exists():
         print(f"Warning: {dst} already exists, overwriting")
     shutil.copy(str(src), str(dst))

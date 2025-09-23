@@ -18,6 +18,7 @@ use std::sync::OnceLock;
 pub use bmvm_common::TypeSignature;
 pub use bmvm_common::hash::SignatureHasher;
 pub use bmvm_common::mem;
+pub use bmvm_common::mem::{Foreign, ForeignBuf, Shared, SharedBuf, Unpackable};
 pub use bmvm_common::registry;
 use bmvm_common::registry::Params;
 pub use bmvm_common::vmi;

@@ -101,6 +101,7 @@ fn gen_wrapper(mother: &Ident, fn_name: &Ident, fn_name_wrapper: &Ident, params:
     let ty_result = quote! {#mother::HypercallResult};
     let ty_foreign = quote! {#mother::Foreign};
     let foreign_shareable = quote! {#mother::ForeignShareable};
+    let unpackable = quote! {#mother::Unpackable};
     let owned_shareable = quote! {#mother::OwnedShareable};
     let var_params = Ident::new(VAR_NAME_PARAM, Span::call_site());
     let var_transport = Ident::new(VAR_NAME_TRANSPORT, Span::call_site());
@@ -122,6 +123,7 @@ fn gen_wrapper(mother: &Ident, fn_name: &Ident, fn_name_wrapper: &Ident, params:
         ParamType::MultipleValues { ty, packaging, .. } => {
             quote! {
                 use #foreign_shareable;
+                use #unpackable;
                 let __foreign = #ty_foreign::<#ty>::from_transport(#var_transport)?;
                 let (#(#packaging),*) = unsafe { __foreign.unpack() };
                 let #var_return = #fn_name(#(#packaging),*);

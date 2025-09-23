@@ -37,7 +37,7 @@ pub fn wasm(path: &PathBuf, warmup: usize, iters: usize) -> anyhow::Result<Vec<f
     }
     fn exec((run, store): &mut (TypedFunc<(), ()>, Store<()>)) -> anyhow::Result<f64> {
         let now = Instant::now();
-        black_box({ run.call(store, ())? });
+        black_box(run.call(store, ())?);
         let elapsed = now.elapsed();
         Ok(elapsed.as_nanos() as f64)
     }
