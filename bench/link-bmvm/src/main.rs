@@ -57,30 +57,30 @@ unsafe extern "C" {
     #[cfg(feature = "links1")]
     seq_macro::seq!(N in 0..1 {
         fn hyper~N() -> i32;
-    })
+    });
 
     #[cfg(feature = "links8")]
     seq_macro::seq!(N in 0..8 {
         fn hyper~N() -> i32;
-    })
+    });
 
     #[cfg(feature = "links16")]
     seq_macro::seq!(N in 0..16 {
         fn hyper~N() -> i32;
-    })
+    });
 
     #[cfg(feature = "links32")]
     seq_macro::seq!(N in 0..32 {
         fn hyper~N() -> i32;
-    })
+    });
 
     #[cfg(feature = "links64")]
     seq_macro::seq!(N in 0..64 {
         fn hyper~N() -> i32;
-    })
+    });
 
     #[cfg(feature = "links128")]
     seq_macro::seq!(N in 0..128 {
         fn hyper~N() -> i32;
-    })
+    });
 }
