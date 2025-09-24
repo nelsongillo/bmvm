@@ -120,13 +120,9 @@ pub fn cwasm(path: &PathBuf, warmup: usize, iters: usize) -> anyhow::Result<Vec<
         let now = Instant::now();
 
         let instance = black_box({
-            let buf = std::fs::read(path)?;
-
             // Create the Wasmtime engine and store
             let engine = Engine::default();
             let mut store = Store::new(&engine, ());
-            let module = WasmModule::from_binary(&engine, buf.as_slice())?;
-
             let module = unsafe { WasmModule::deserialize_file(&engine, path) }?;
 
             let mut linker = Linker::new(&engine);
