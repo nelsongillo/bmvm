@@ -12,13 +12,13 @@ members = [
     "examples/host-bench",
     "examples/wasm",
     "examples/ctx",
-    # Debug Tooling
+    # Tooling
     "tooling/printlayout",
     "tooling/vmi-inspect",
     "tooling/benchy",
     "tooling/fmtns",
     "tooling/plotty",
-    # Benchmark Guests
+    # Benchmarks
     "bench/bmvm_echo",
     "bench/wasm_echo",
     "bench/aes_bmvm",
@@ -26,4 +26,7 @@ members = [
     "bench/link-bmvm",
     "bench/link-wasm",
     "bench/micro",
+    "bench/run_wasm",
+    "bench/run_cwasm",
+    "bench/run_bmvm",
 ]

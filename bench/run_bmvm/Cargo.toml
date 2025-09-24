@@ -1,0 +1,9 @@
+[package]
+name = "run-bmvm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.99"
+bmvm-host = {path = "../../bmvm_host"}
+inventory = "0.3.21"
