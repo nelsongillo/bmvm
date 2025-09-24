@@ -10,6 +10,7 @@ enum Runtime {
     Wasm,
     CWasm,
     Bmvm,
+    Kvm,
 }
 
 #[derive(ValueEnum, Copy, Clone, Debug, Eq, PartialEq)]
@@ -44,6 +45,7 @@ impl Runtime {
             Runtime::Wasm => bench::startup::wasm(path, warmup, iters),
             Runtime::CWasm => bench::startup::cwasm(path, warmup, iters),
             Runtime::Bmvm => bench::startup::bmvm(path, warmup, iters),
+            Runtime::Kvm => bench::startup::kvm(warmup, iters),
             _ => Err(anyhow::anyhow!(
                 "Startup is not supported for this runtime: {self:?}"
             )),
@@ -56,6 +58,7 @@ impl Runtime {
             Runtime::Wasm => String::from("wasm"),
             Runtime::CWasm => String::from("cwasm"),
             Runtime::Bmvm => String::from("bmvm"),
+            Runtime::Kvm => String::from("kvm"),
         }
     }
 }

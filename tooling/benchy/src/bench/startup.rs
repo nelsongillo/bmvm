@@ -2,8 +2,11 @@ use crate::bench::bench;
 use bmvm_host::mem::{AlignedNonZeroUsize, AlignedUsize};
 use bmvm_host::{ConfigBuilder, ModuleBuilder, Upcall, expose, linker};
 use const_format::formatcp;
+use kvm_bindings::kvm_userspace_memory_region;
+use kvm_ioctls::Kvm;
 use std::hint::black_box;
 use std::path::PathBuf;
+use std::ptr::null_mut;
 use std::time::Instant;
 use wasmtime::{Engine, Instance, Linker, Module as WasmModule, Store, TypedFunc};
 
@@ -291,6 +294,50 @@ pub fn bmvm(path: &PathBuf, warmup: usize, iters: usize) -> anyhow::Result<Vec<f
         Ok(())
     }
     bench(path, warmup, iters, pre, exec, post)
+}
+
+pub fn kvm(warmup: usize, iters: usize) -> anyhow::Result<Vec<f64>> {
+    fn pre(_path: &PathBuf) -> anyhow::Result<()> {
+        Ok(())
+    }
+    fn exec(_: &mut ()) -> anyhow::Result<f64> {
+        let now = Instant::now();
+        let foo = black_box({
+            let kvm = Kvm::new()?;
+            let vm = kvm.create_vm()?;
+            let slot = 0;
+            let load_addr: *mut u8 = unsafe {
+                libc::mmap(
+                    null_mut(),
+                    0x1000,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_ANONYMOUS | libc::MAP_SHARED | libc::MAP_NORESERVE,
+                    -1,
+                    0,
+                ) as *mut u8
+            };
+            let mem_region = kvm_userspace_memory_region {
+                slot,
+                guest_phys_addr: 0x1000,
+                memory_size: 0x1000u64,
+                userspace_addr: load_addr as u64,
+                flags: 0,
+            };
+            unsafe { vm.set_user_memory_region(mem_region).unwrap() };
+            let vcpu = vm.create_vcpu(0).unwrap();
+            (kvm, vm, vcpu)
+        });
+
+        let elapsed = now.elapsed();
+
+        let _ = foo;
+
+        Ok(elapsed.as_nanos() as f64)
+    }
+    fn post(_: &mut ()) -> anyhow::Result<()> {
+        Ok(())
+    }
+    bench(&PathBuf::new(), warmup, iters, pre, exec, post)
 }
 
 #[cfg(feature = "links1")]
