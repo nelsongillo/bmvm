@@ -72,7 +72,7 @@ impl Module {
             feature = "link",
             feature = "run"
         ))]
-        println!("{:?}", elapsed.as_nanos());
+        print!("{:?}", elapsed.as_nanos());
 
         Ok(Self { vm })
     }
