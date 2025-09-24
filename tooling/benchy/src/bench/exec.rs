@@ -18,7 +18,9 @@ pub fn native(
         Ok((path.clone(), args))
     }
     fn exec((path, args): &mut (PathBuf, String)) -> anyhow::Result<f64> {
-        let output: Output = std::process::Command::new(&path).arg(&args).output()?;
+        let output: Output = std::process::Command::new(&path)
+            .args(args.split_ascii_whitespace())
+            .output()?;
         let s = String::from_utf8_lossy(&output.stdout);
         let v = s.parse::<u64>()?;
         Ok(v as f64)
