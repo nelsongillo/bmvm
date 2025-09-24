@@ -6,6 +6,7 @@ use crate::{linker, vm};
 use bmvm_common::registry::Params;
 use bmvm_common::vmi::ForeignShareable;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -31,19 +32,48 @@ pub struct Module {
 
 impl Module {
     fn new(vm: vm::Config, linker: linker::Config, buf: &Buffer) -> Result<Module> {
+        #[cfg(feature = "kvm")]
+        let now = Instant::now();
         let mut vm = vm::Vm::new(vm)?;
+        #[cfg(feature = "kvm")]
+        let elapsed = now.elapsed();
         let mut linker = linker::Linker::new(linker)?;
         // parse the guest executable
+        #[cfg(feature = "parse")]
+        let now = Instant::now();
         let mut executable = ExecBundle::from_buffer(buf, vm.allocator())?;
-
+        #[cfg(feature = "parse")]
+        let elapsed = now.elapsed();
         // execute linking stage
+        #[cfg(feature = "link")]
+        let now = Instant::now();
         linker.link(&executable)?;
+        #[cfg(feature = "link")]
+        let elapsed = now.elapsed();
 
+        #[cfg(feature = "load")]
+        let now = Instant::now();
         vm.load_exec(&mut executable)?;
+        #[cfg(feature = "load")]
+        let elapsed = now.elapsed();
         let (upcalls, hypercalls) = linker.into_calls();
 
         vm.link(hypercalls, upcalls);
+        #[cfg(feature = "run")]
+        let now = Instant::now();
         vm.run().map_err(Error::Vm)?;
+        #[cfg(feature = "run")]
+        let elapsed = now.elapsed();
+
+        #[cfg(any(
+            feature = "kvm",
+            feature = "load",
+            feature = "parse",
+            feature = "link",
+            feature = "run"
+        ))]
+        println!("{:?}", elapsed.as_nanos());
+
         Ok(Self { vm })
     }
 

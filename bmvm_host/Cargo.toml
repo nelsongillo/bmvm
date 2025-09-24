@@ -5,6 +5,12 @@ edition = "2024"
 
 [features]
 benchmarks = ["log/release_max_level_off"]
+kvm = []
+load = []
+parse = []
+link = []
+run = []
+
 
 [dependencies]
 nix = { version = "0.30.1", features = ["mman"] }

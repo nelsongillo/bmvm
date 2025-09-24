@@ -1,26 +1,32 @@
 use crate::bench::bench;
 use bmvm_host::mem::AlignedUsize;
 use bmvm_host::{ConfigBuilder, Module as BmvmModule, ModuleBuilder, Upcall, linker};
+use std::ffi::OsStr;
 use std::hint::black_box;
 use std::path::PathBuf;
 use std::process::Output;
 use std::time::Instant;
 use wasmtime::{Engine, Instance, Module as WasmModule, Store, TypedFunc};
 
-pub fn native(path: &PathBuf, warmup: usize, iters: usize) -> anyhow::Result<Vec<f64>> {
-    fn pre(path: &PathBuf) -> anyhow::Result<PathBuf> {
-        Ok(path.clone())
+pub fn native(
+    path: &PathBuf,
+    warmup: usize,
+    iters: usize,
+    args: String,
+) -> anyhow::Result<Vec<f64>> {
+    fn pre((path, args): (&PathBuf, String)) -> anyhow::Result<(PathBuf, String)> {
+        Ok((path.clone(), args))
     }
-    fn exec(path: &mut PathBuf) -> anyhow::Result<f64> {
-        let output: Output = std::process::Command::new(&path).output()?;
+    fn exec((path, args): &mut (PathBuf, String)) -> anyhow::Result<f64> {
+        let output: Output = std::process::Command::new(&path).arg(&args).output()?;
         let s = String::from_utf8_lossy(&output.stdout);
         let v = s.parse::<u64>()?;
         Ok(v as f64)
     }
-    fn post(_: &mut PathBuf) -> anyhow::Result<()> {
+    fn post(_: &mut (PathBuf, String)) -> anyhow::Result<()> {
         Ok(())
     }
-    bench(path, warmup, iters, pre, exec, post)
+    bench((path, args), warmup, iters, pre, exec, post)
 }
 
 pub fn wasm(path: &PathBuf, warmup: usize, iters: usize) -> anyhow::Result<Vec<f64>> {

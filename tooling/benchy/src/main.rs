@@ -29,9 +29,15 @@ impl Mode {
 }
 
 impl Runtime {
-    fn exec(&self, path: &PathBuf, warmup: usize, iters: usize) -> anyhow::Result<Vec<f64>> {
+    fn exec(
+        &self,
+        path: &PathBuf,
+        warmup: usize,
+        iters: usize,
+        args: String,
+    ) -> anyhow::Result<Vec<f64>> {
         match self {
-            Runtime::Native => bench::exec::native(path, warmup, iters),
+            Runtime::Native => bench::exec::native(path, warmup, iters, args),
             Runtime::Wasm => bench::exec::wasm(path, warmup, iters),
             Runtime::Bmvm => bench::exec::bmvm(path, warmup, iters),
             _ => Err(anyhow::anyhow!(
@@ -95,6 +101,8 @@ struct Args {
     iters: usize,
     #[arg(short, long, env = "OUTPUT")]
     output: Option<String>,
+    #[arg(short, long, env = "ARGS")]
+    args: String,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -116,7 +124,9 @@ fn main() -> anyhow::Result<()> {
 
     let results = match args.mode {
         Mode::Start => args.runtime.startup(&args.file, args.warmup, args.iters)?,
-        Mode::Exec => args.runtime.exec(&args.file, args.warmup, args.iters)?,
+        Mode::Exec => args
+            .runtime
+            .exec(&args.file, args.warmup, args.iters, args.args)?,
     };
 
     output.push(args.mode.dir());

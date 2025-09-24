@@ -1,25 +1,29 @@
 use indicatif::ProgressBar;
+use std::fmt::{Debug, Display};
 use std::path::PathBuf;
 
 pub mod exec;
 pub mod startup;
 
-type Pre<T> = fn(&PathBuf) -> anyhow::Result<T>;
+type Pre<I, T> = fn(I) -> anyhow::Result<T>;
 type Exec<T> = fn(&mut T) -> anyhow::Result<f64>;
 type Post<T> = fn(&mut T) -> anyhow::Result<()>;
 
-fn bench<T>(
-    path: &PathBuf,
+fn bench<I, T>(
+    input: I,
     warmup: usize,
     iters: usize,
-    prep: Pre<T>,
+    prep: Pre<I, T>,
     exec: Exec<T>,
     post: Post<T>,
-) -> anyhow::Result<Vec<f64>> {
+) -> anyhow::Result<Vec<f64>>
+where
+    I: Debug,
+{
     let mut samples: Vec<f64> = Vec::with_capacity(iters);
-    println!("Executable: {}", path.display());
+    println!("Executable: {:?}", input);
 
-    let mut state = prep(&path)?;
+    let mut state = prep(input)?;
 
     // Executing optional warmup phase
     if warmup > 0 {

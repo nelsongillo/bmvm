@@ -1,0 +1,25 @@
+[package]
+name = "micro"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+kvm = ["bmvm-host/kvm"]
+load = ["bmvm-host/load"]
+parse = ["bmvm-host/parse"]
+link = ["bmvm-host/link"]
+run = ["bmvm-host/run"]
+links1 = []
+links8 = []
+links16 = []
+links32 = []
+links64 = []
+links128 = []
+
+[dependencies]
+anyhow = "1.0.99"
+bmvm-host = {path = "../../bmvm_host"}
+seq-macro = "0.3.6"
+loop-code = "0.5.2"
+inventory = "0.3.21"
+const_format = "0.2.34"

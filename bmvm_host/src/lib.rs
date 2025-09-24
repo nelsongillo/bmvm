@@ -2,6 +2,7 @@
 #![feature(allocator_api)]
 #![feature(iterator_try_collect)]
 #![feature(adt_const_params)]
+#![feature(stmt_expr_attributes)]
 
 mod alloc;
 mod elf;

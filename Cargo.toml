@@ -25,4 +25,5 @@ members = [
     "bench/aes_wasm",
     "bench/link-bmvm",
     "bench/link-wasm",
+    "bench/micro",
 ]

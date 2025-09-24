@@ -1277,6 +1277,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "micro"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bmvm-host",
+ "const_format",
+ "inventory",
+ "loop-code",
+ "seq-macro",
+]
+
+[[package]]
 name = "nix"
 version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
