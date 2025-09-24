@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-hosts=("kvm" "load" "parse" "link" "run")
-guests=("links1" "links8" "link16" "links32" "links64" "links128")
+benches=("kvm" "load" "parse" "link" "run")
+links=("links1" "links8" "link16" "links32" "links64" "links128")
 output="bench/binaries/micro"
 mkdir -p "$output"
 
