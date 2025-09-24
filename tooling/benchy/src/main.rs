@@ -8,6 +8,7 @@ mod eval;
 enum Runtime {
     Native,
     Wasm,
+    CWasm,
     Bmvm,
 }
 
@@ -32,12 +33,16 @@ impl Runtime {
             Runtime::Native => bench::exec::native(path, warmup, iters),
             Runtime::Wasm => bench::exec::wasm(path, warmup, iters),
             Runtime::Bmvm => bench::exec::bmvm(path, warmup, iters),
+            _ => Err(anyhow::anyhow!(
+                "Execution is not supported for this runtime: {self:?}"
+            )),
         }
     }
 
     fn startup(&self, path: &PathBuf, warmup: usize, iters: usize) -> anyhow::Result<Vec<f64>> {
         match self {
             Runtime::Wasm => bench::startup::wasm(path, warmup, iters),
+            Runtime::CWasm => bench::startup::cwasm(path, warmup, iters),
             Runtime::Bmvm => bench::startup::bmvm(path, warmup, iters),
             _ => Err(anyhow::anyhow!(
                 "Startup is not supported for this runtime: {self:?}"
@@ -49,6 +54,7 @@ impl Runtime {
         match self {
             Runtime::Native => String::from("native"),
             Runtime::Wasm => String::from("wasm"),
+            Runtime::CWasm => String::from("cwasm"),
             Runtime::Bmvm => String::from("bmvm"),
         }
     }

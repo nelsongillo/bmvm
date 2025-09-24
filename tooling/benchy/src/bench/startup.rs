@@ -110,6 +110,99 @@ pub fn wasm(path: &PathBuf, warmup: usize, iters: usize) -> anyhow::Result<Vec<f
     bench(path, warmup, iters, pre, exec, post)
 }
 
+pub fn cwasm(path: &PathBuf, warmup: usize, iters: usize) -> anyhow::Result<Vec<f64>> {
+    fn pre(path: &PathBuf) -> anyhow::Result<PathBuf> {
+        Ok(path.clone())
+    }
+    fn exec(path: &mut PathBuf) -> anyhow::Result<f64> {
+        let mut calls: Vec<TypedFunc<(), i32>> = Vec::with_capacity(LINKS);
+
+        let now = Instant::now();
+
+        let instance = black_box({
+            let buf = std::fs::read(path)?;
+
+            // Create the Wasmtime engine and store
+            let engine = Engine::default();
+            let mut store = Store::new(&engine, ());
+            let module = WasmModule::from_binary(&engine, buf.as_slice())?;
+
+            let module = unsafe { WasmModule::deserialize_file(&engine, path) }?;
+
+            let mut linker = Linker::new(&engine);
+
+            #[cfg(feature = "links1")]
+            linker.func_wrap("env", "hyper0", || 0i32);
+
+            #[cfg(feature = "links8")]
+            loop_code::repeat!(INDEX 8 {
+                linker.func_wrap("env", format!("hyper{}", INDEX).as_str(), || 0i32);
+            });
+
+            #[cfg(feature = "links16")]
+            loop_code::repeat!(INDEX 16 {
+                linker.func_wrap("env", format!("hyper{}", INDEX).as_str(), || 0i32);
+            });
+
+            #[cfg(feature = "links32")]
+            loop_code::repeat!(INDEX 32 {
+                linker.func_wrap("env", format!("hyper{}", INDEX).as_str(), || 0i32);
+            });
+
+            #[cfg(feature = "links64")]
+            loop_code::repeat!(INDEX 64 {
+                linker.func_wrap("env", format!("hyper{}", INDEX).as_str(), || 0i32);
+            });
+
+            #[cfg(feature = "links128")]
+            loop_code::repeat!(INDEX 128 {
+                linker.func_wrap("env", format!("hyper{}", INDEX).as_str(), || 0i32);
+            });
+
+            let instance: Instance = linker.instantiate(&mut store, &module)?;
+
+            #[cfg(feature = "links1")]
+            {
+                calls.push(instance.get_typed_func::<(), i32>(&mut store, "up0")?);
+            }
+
+            #[cfg(feature = "links8")]
+            loop_code::repeat!(INDEX 8 {
+                calls.push(instance.get_typed_func::<(), i32>(&mut store, formatcp!("up{}", INDEX))?);
+            });
+
+            #[cfg(feature = "links16")]
+            loop_code::repeat!(INDEX 16 {
+               calls.push(instance.get_typed_func::<(), i32>(&mut store, formatcp!("up{}", INDEX))?);
+            });
+
+            #[cfg(feature = "links32")]
+            loop_code::repeat!(INDEX 32 {
+               calls.push(instance.get_typed_func::<(), i32>(&mut store, formatcp!("up{}", INDEX))?);
+            });
+
+            #[cfg(feature = "links64")]
+            loop_code::repeat!(INDEX 64 {
+               calls.push(instance.get_typed_func::<(), i32>(&mut store, formatcp!("up{}", INDEX))?);
+            });
+
+            #[cfg(feature = "links128")]
+            loop_code::repeat!(INDEX 128 {
+                calls.push(instance.get_typed_func::<(), i32>(&mut store, formatcp!("up{}", INDEX))?);
+            });
+        });
+        let elapsed = now.elapsed();
+        std::mem::drop(calls);
+        let _ = instance;
+
+        Ok(elapsed.as_nanos() as f64)
+    }
+    fn post(_: &mut PathBuf) -> anyhow::Result<()> {
+        Ok(())
+    }
+    bench(path, warmup, iters, pre, exec, post)
+}
+
 pub fn bmvm(path: &PathBuf, warmup: usize, iters: usize) -> anyhow::Result<Vec<f64>> {
     fn pre(path: &PathBuf) -> anyhow::Result<PathBuf> {
         Ok(path.clone())
