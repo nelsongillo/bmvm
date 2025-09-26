@@ -108,6 +108,24 @@ impl Samples {
     }
 }
 
+pub fn multi_eval<const N: usize>(
+    directory: PathBuf,
+    durations: &[Vec<f64>; N],
+) -> anyhow::Result<()> {
+    println!("Evaluating...");
+    println!("Writing results to {}", directory.display());
+    for i in 0..N {
+        let current = directory.join(i.to_string());
+        std::fs::create_dir_all(&current)?;
+        let samples = Samples::new(&durations[i]);
+        let summary = samples.summary();
+        write_raw(&current, samples)?;
+        write_summary(&current, &summary)?;
+    }
+
+    Ok(())
+}
+
 pub fn eval(directory: PathBuf, durations: &[f64]) -> anyhow::Result<()> {
     println!("Evaluating...");
     println!("Writing results to {}", directory.display());

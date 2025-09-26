@@ -5,11 +5,7 @@ edition = "2024"
 
 [features]
 benchmarks = ["log/release_max_level_off"]
-kvm = []
-load = []
-parse = []
-link = []
-run = []
+times = []
 
 
 [dependencies]

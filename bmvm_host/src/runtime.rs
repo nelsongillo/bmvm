@@ -6,7 +6,7 @@ use crate::{linker, vm};
 use bmvm_common::registry::Params;
 use bmvm_common::vmi::ForeignShareable;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -32,47 +32,48 @@ pub struct Module {
 
 impl Module {
     fn new(vm: vm::Config, linker: linker::Config, buf: &Buffer) -> Result<Module> {
-        #[cfg(feature = "kvm")]
-        let now = Instant::now();
+        #[cfg(feature = "times")]
+        let now_kvm = Instant::now();
         let mut vm = vm::Vm::new(vm)?;
-        #[cfg(feature = "kvm")]
-        let elapsed = now.elapsed();
+        #[cfg(feature = "times")]
+        let elapsed_kvm = now_kvm.elapsed();
         let mut linker = linker::Linker::new(linker)?;
         // parse the guest executable
-        #[cfg(feature = "parse")]
-        let now = Instant::now();
+        #[cfg(feature = "times")]
+        let now_prep = Instant::now();
         let mut executable = ExecBundle::from_buffer(buf, vm.allocator())?;
-        #[cfg(feature = "parse")]
-        let elapsed = now.elapsed();
+        #[cfg(feature = "times")]
+        let elapsed_prep = now_prep.elapsed();
         // execute linking stage
-        #[cfg(feature = "link")]
-        let now = Instant::now();
+        #[cfg(feature = "times")]
+        let now_link = Instant::now();
         linker.link(&executable)?;
-        #[cfg(feature = "link")]
-        let elapsed = now.elapsed();
+        #[cfg(feature = "times")]
+        let elapsed_link = now_link.elapsed();
 
-        #[cfg(feature = "load")]
-        let now = Instant::now();
+        #[cfg(feature = "times")]
+        let now_load = Instant::now();
         vm.load_exec(&mut executable)?;
-        #[cfg(feature = "load")]
-        let elapsed = now.elapsed();
+        #[cfg(feature = "times")]
+        let elapsed_load = now_load.elapsed();
         let (upcalls, hypercalls) = linker.into_calls();
 
         vm.link(hypercalls, upcalls);
-        #[cfg(feature = "run")]
-        let now = Instant::now();
+        #[cfg(feature = "times")]
+        let now_init = Instant::now();
         vm.run().map_err(Error::Vm)?;
-        #[cfg(feature = "run")]
-        let elapsed = now.elapsed();
+        #[cfg(feature = "times")]
+        let elapsed_init = now_init.elapsed();
 
-        #[cfg(any(
-            feature = "kvm",
-            feature = "load",
-            feature = "parse",
-            feature = "link",
-            feature = "run"
-        ))]
-        print!("{:?}", elapsed.as_nanos());
+        #[cfg(feature = "times")]
+        print!(
+            "{} {} {} {} {}",
+            elapsed_kvm.as_nanos(),
+            elapsed_prep.as_nanos(),
+            elapsed_link.as_nanos(),
+            elapsed_load.as_nanos(),
+            elapsed_init.as_nanos()
+        );
 
         Ok(Self { vm })
     }

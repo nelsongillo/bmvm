@@ -1,4 +1,5 @@
 use clap::{Parser, ValueEnum};
+use libc::res_init;
 use std::path::PathBuf;
 
 mod bench;
@@ -17,6 +18,7 @@ enum Runtime {
 enum Mode {
     Start,
     Exec,
+    BmvmSplit,
 }
 
 impl Mode {
@@ -24,6 +26,7 @@ impl Mode {
         match self {
             Mode::Start => String::from("startup"),
             Mode::Exec => String::from("exec"),
+            Mode::BmvmSplit => String::from("bmvm-split"),
         }
     }
 }
@@ -52,6 +55,21 @@ impl Runtime {
             Runtime::CWasm => bench::startup::cwasm(path, warmup, iters),
             Runtime::Bmvm => bench::startup::bmvm(path, warmup, iters),
             Runtime::Kvm => bench::startup::kvm(warmup, iters),
+            _ => Err(anyhow::anyhow!(
+                "Startup is not supported for this runtime: {self:?}"
+            )),
+        }
+    }
+
+    fn bmvm_split<const N: usize>(
+        &self,
+        path: &PathBuf,
+        warmup: usize,
+        iters: usize,
+        args: String,
+    ) -> anyhow::Result<[Vec<f64>; N]> {
+        match self {
+            Runtime::Native => bench::partial::native(path, warmup, iters, args),
             _ => Err(anyhow::anyhow!(
                 "Startup is not supported for this runtime: {self:?}"
             )),
@@ -102,7 +120,7 @@ struct Args {
     #[arg(short, long, env = "OUTPUT")]
     output: Option<String>,
     #[arg(short, long, env = "ARGS")]
-    args: String,
+    args: Option<String>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -122,16 +140,29 @@ fn main() -> anyhow::Result<()> {
         PathBuf::from(".")
     };
 
-    let results = match args.mode {
-        Mode::Start => args.runtime.startup(&args.file, args.warmup, args.iters)?,
-        Mode::Exec => args
-            .runtime
-            .exec(&args.file, args.warmup, args.iters, args.args)?,
-    };
-
     output.push(args.mode.dir());
     output.push(args.runtime.dir());
     output.push(args.file.file_stem().unwrap());
 
-    eval::eval(output, &results)
+    match args.mode {
+        Mode::Start => {
+            let result = args.runtime.startup(&args.file, args.warmup, args.iters)?;
+            eval::eval(output, &result)
+        }
+        Mode::Exec => {
+            let result =
+                args.runtime
+                    .exec(&args.file, args.warmup, args.iters, args.args.unwrap())?;
+            eval::eval(output, &result)
+        }
+        Mode::BmvmSplit => {
+            let results = args.runtime.bmvm_split::<5>(
+                &args.file,
+                args.warmup,
+                args.iters,
+                args.args.unwrap(),
+            )?;
+            eval::multi_eval(output, &results)
+        }
+    }
 }
