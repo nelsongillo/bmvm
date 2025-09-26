@@ -10,6 +10,13 @@ use std::ptr::null_mut;
 use std::time::Instant;
 use wasmtime::{Engine, Instance, Linker, Module as WasmModule, Store, TypedFunc};
 
+#[cfg(not(any(
+    feature = "links8",
+    feature = "links16",
+    feature = "links32",
+    feature = "links64",
+    feature = "links128",
+)))]
 const LINKS: usize = 1;
 #[cfg(feature = "links8")]
 const LINKS: usize = 8;
