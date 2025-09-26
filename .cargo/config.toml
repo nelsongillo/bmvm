@@ -1,5 +1,7 @@
 [target.x86_64-unknown-none]
 rustflags = [
     "-C", "link-arg=-Tlayout.x",
-    "-C", "relocation-model=static"
+    "-C", "relocation-model=static",
+    "-C", "target-cpu=native",
+    "-C", "target-feature=-soft-float",
 ]
