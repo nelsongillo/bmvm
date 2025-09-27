@@ -14,12 +14,12 @@ pub struct Summary {
 pub struct PlotData {
     types: Vec<String>,
     executions: Vec<String>,
-    data: HashMap<String, Vec<Duration>>,
+    data: HashMap<String, Vec<u64>>,
 }
 
 pub fn collect_data(data_dir: &Path) -> Result<PlotData> {
     let mut types = Vec::new();
-    let mut data: HashMap<String, Vec<Duration>> = HashMap::new();
+    let mut data: HashMap<String, Vec<u64>> = HashMap::new();
     let mut freq = HashMap::<String, usize>::new();
 
     // First, collect all types (directories) and ensure we have consistent executions
@@ -40,11 +40,13 @@ pub fn collect_data(data_dir: &Path) -> Result<PlotData> {
             .for_each(|e| *freq.entry(e).or_insert(0) += 1);
     }
 
-    let executions: Vec<String> = freq
+    let mut executions: Vec<String> = freq
         .into_iter()
         .filter(|(_, v)| *v == dir_entries.len())
         .map(|(k, _)| k)
         .collect();
+
+    executions.sort();
 
     // Now collect data for each type
     for entry in dir_entries {
@@ -64,7 +66,7 @@ pub fn collect_data(data_dir: &Path) -> Result<PlotData> {
                 .with_context(|| format!("Failed to parse JSON in {:?}", summary_path))?;
 
             // Convert nanoseconds to microseconds for better readability
-            mean_values.push(Duration::from_nanos(summary.mean.floor() as u64));
+            mean_values.push(summary.mean.floor() as u64);
         }
 
         data.insert(type_name, mean_values);
@@ -127,7 +129,7 @@ pub fn generate_latex_plot(plot_data: &PlotData, output: &Path) -> Result<()> {
         latex.push_str("\\addplot coordinates {\n");
 
         for (x, y) in values.iter().enumerate() {
-            latex.push_str(&format!("({},{})\n", x + 1, y.as_nanos()));
+            latex.push_str(&format!("({},{})\n", x + 1, y));
         }
 
         latex.push_str(&format!("}};\n\\addlegendentry{{{}}};\n\n", type_name));
