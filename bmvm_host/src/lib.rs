@@ -1,7 +1,4 @@
-#![feature(new_range_api)]
-#![feature(allocator_api)]
 #![feature(iterator_try_collect)]
-#![feature(adt_const_params)]
 
 mod alloc;
 mod elf;

@@ -1,8 +1,5 @@
 #![cfg_attr(not(any(feature = "vmi-consume", feature = "vmi-macro")), no_std)]
-#![feature(alloc_error_handler)]
-#![feature(sync_unsafe_cell)]
 #![feature(allocator_api)]
-#![feature(slice_as_array)]
 #![feature(macro_metavar_expr_concat)]
 #[cfg(feature = "vmi-consume")]
 extern crate alloc;
