@@ -41,19 +41,19 @@ SECTIONS
     } :got
 
 
-    .bmvm.vmi.debug (NOLOAD): {
-        KEEP(*(.bmvm.vmi.debug));
+    .bmvm.vpc.debug (NOLOAD): {
+        KEEP(*(.bmvm.vpc.debug));
     } :note
 
-    .bmvm.vmi.expose : {
-        KEEP(*(.bmvm.vmi.expose));
+    .bmvm.vpc.upcall : {
+        KEEP(*(.bmvm.vpc.upcall));
     } :note
 
-    .bmvm.vmi.expose.calls : {
-        KEEP(*(.bmvm.vmi.expose.calls));
+    .bmvm.vpc.upcall.calls : {
+        KEEP(*(.bmvm.vpc.upcall.calls));
     } :note
 
-    .bmvm.vmi.host : {
-        KEEP(*(.bmvm.vmi.host));
+    .bmvm.vpc.hypercall : {
+        KEEP(*(.bmvm.vpc.hypercall));
     } :note
 }

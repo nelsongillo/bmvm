@@ -26,12 +26,12 @@ pub const HYPERCALL_IO_PORT: u16 = 0x0434;
 pub const EXIT_IO_PORT: u16 = 0x0433;
 
 /// The ELF section name for the metadata containing the call guest required function information.
-pub const BMVM_META_SECTION_HOST: &str = ".bmvm.vmi.host";
+pub const BMVM_META_SECTION_HOST: &str = ".bmvm.vpc.hypercall";
 /// The ELF section name for the metadata containing the call guest provided function information.
-pub const BMVM_META_SECTION_EXPOSE: &str = ".bmvm.vmi.expose";
+pub const BMVM_META_SECTION_EXPOSE: &str = ".bmvm.vpc.upcall";
 /// The ELF section name for the metadata containing the call guest required function calls.
-pub const BMVM_META_SECTION_EXPOSE_CALLS: &str = ".bmvm.vmi.expose.calls";
+pub const BMVM_META_SECTION_EXPOSE_CALLS: &str = ".bmvm.vpc.upcall.calls";
 /// The ELF section name for the debug metadata.
-pub const BMVM_META_SECTION_DEBUG: &str = ".bmvm.vmi.debug";
+pub const BMVM_META_SECTION_DEBUG: &str = ".bmvm.vpc.debug";
 /// The memory layout table will be places at this address for the guest to access.
 pub const BMVM_MEM_LAYOUT_TABLE: PhysAddr = PhysAddr::new_unchecked(0x1000);

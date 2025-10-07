@@ -21,7 +21,7 @@ pub use bmvm_common::vmi;
 use bmvm_common::vmi::FnPtr;
 pub use bmvm_common::vmi::{ForeignShareable, OwnedShareable, Signature, Transport};
 // re-export bmvm-macros
-pub use bmvm_macros::{TypeSignature, expose_host as expose};
+pub use bmvm_macros::{TypeSignature, expose_host as hypercall};
 
 use crate::vm::{GDT_PAGE_REQUIRED, IDT_PAGE_REQUIRED};
 pub use elf::Buffer;

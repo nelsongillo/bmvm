@@ -24,7 +24,7 @@ pub use bmvm_common::{EXIT_IO_PORT, HYPERCALL_IO_PORT, TypeSignature};
 use crate::panic::ready;
 use crate::setup::setup;
 pub use bmvm_macros::TypeSignature;
-pub use bmvm_macros::{expose_guest as expose, host};
+pub use bmvm_macros::{expose_guest as upcall, host as hypercall};
 
 #[cfg(feature = "setup")]
 pub use bmvm_macros::setup;

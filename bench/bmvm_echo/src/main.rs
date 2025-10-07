@@ -1,9 +1,9 @@
 #![no_std]
 #![no_main]
 
-use bmvm_guest::{ForeignBuf, SharedBuf, alloc_buf, expose};
+use bmvm_guest::{ForeignBuf, SharedBuf, alloc_buf, upcall};
 
-#[expose]
+#[upcall]
 fn noop() {
     // unsafe {
     //     core::arch::asm!(
@@ -12,7 +12,7 @@ fn noop() {
     // };
 }
 
-#[expose]
+#[upcall]
 fn reverse(foreign: ForeignBuf) -> SharedBuf {
     let mut owned = unsafe { alloc_buf(foreign.len()).ok().unwrap() };
     let buf = owned.as_mut();
